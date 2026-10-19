@@ -1,0 +1,703 @@
+/* ── Labs design language ───────────────────────────────────────────────────
+   Labs is one app: a top bar, a document canvas, an assistant rail.
+   Everything here is scoped to .labs-* classes and built on the app's
+   Tailwind CSS variables (client/src/index.css) so dark and .light both work.
+   No global overrides. */
+
+/* ── Surfaces ─────────────────────────────────────────────────────────────── */
+
+.labs-shell {
+  /* One shared rhythm for the whole Labs app */
+  --labs-rail: 1px;
+  --labs-radius: 12px;
+  --labs-page-width: 760px;
+}
+
+/* The scrolling document area behind the page */
+.labs-canvas {
+  padding: 24px 20px 80px;
+  overscroll-behavior: contain;
+  background:
+    radial-gradient(120% 60% at 50% 0%, hsl(var(--foreground) / 0.025), transparent 60%),
+    hsl(var(--background));
+}
+
+.light .labs-canvas {
+  background:
+    radial-gradient(120% 60% at 50% 0%, hsl(var(--foreground) / 0.02), transparent 60%),
+    hsl(var(--background));
+}
+
+/* The page: centred, generous, no card chrome — the text is the interface */
+.labs-page {
+  position: relative;
+  max-width: var(--labs-page-width);
+  margin: 0 auto;
+  padding: 32px clamp(22px, 8%, var(--doc-margin, 22mm)) 90px;
+  min-height: 75vh;
+  background: #fff;
+  color: var(--doc-ink, #263342);
+  border: 1px solid #e4e8eb;
+  border-radius: 3px;
+  box-shadow: 0 4px 30px #00000012;
+  color-scheme: light;
+}
+
+@media (max-width: 767px) {
+  .labs-canvas { padding: 12px 8px 48px; }
+  .labs-page {
+    padding: 20px 22px 60px;
+  }
+}
+
+.labs-paper-label {
+  display: flex;
+  justify-content: space-between;
+  color: var(--doc-muted);
+  font: 9px/1.4 Arial, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  padding-bottom: 16px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--doc-table-border);
+  user-select: none;
+}
+
+/* ── Prose ────────────────────────────────────────────────────────────────── */
+
+.labs-prose .ProseMirror {
+  outline: none;
+  min-height: 55vh;
+  font-family: var(--doc-font);
+  font-size: var(--doc-size);
+  line-height: var(--doc-leading);
+  color: var(--doc-ink);
+  caret-color: var(--doc-accent);
+  word-break: break-word;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Heading scale — real hierarchy, tight leading, optical letter-spacing */
+.labs-prose .ProseMirror h1 {
+  font-family: var(--doc-heading-font);
+  font-size: var(--doc-title-size);
+  color: var(--doc-accent);
+  font-weight: 700;
+  line-height: 1.22;
+  letter-spacing: -0.022em;
+  margin: 0 0 9pt;
+}
+
+.labs-prose .ProseMirror h2 {
+  font-family: var(--doc-heading-font);
+  font-size: var(--doc-heading-size);
+  color: var(--doc-accent);
+  font-weight: 650;
+  line-height: 1.22;
+  letter-spacing: -0.014em;
+  margin: 22pt 0 9pt;
+}
+
+.labs-prose .ProseMirror h3 {
+  font-family: var(--doc-heading-font);
+  font-size: var(--doc-subheading-size);
+  color: var(--doc-accent);
+  font-weight: 620;
+  line-height: 1.22;
+  letter-spacing: -0.008em;
+  margin: 22pt 0 9pt;
+}
+
+.labs-prose .ProseMirror h4,
+.labs-prose .ProseMirror h5,
+.labs-prose .ProseMirror h6 {
+  font-family: var(--doc-heading-font);
+  font-size: var(--doc-subheading-size);
+  font-weight: 620;
+  line-height: 1.22;
+  margin: 22pt 0 9pt;
+  color: var(--doc-accent);
+}
+
+.labs-prose .ProseMirror>*:first-child {
+  margin-top: 0;
+}
+
+.labs-prose .ProseMirror p {
+  margin: 0 0 var(--doc-after);
+}
+
+/* Blockquote */
+.labs-prose .ProseMirror blockquote {
+  position: relative;
+  border-left: 3px solid var(--doc-accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--doc-soft);
+  padding: 10pt 14pt;
+  margin: 16pt 0;
+  color: var(--doc-ink);
+  font-style: normal;
+}
+
+.labs-prose .ProseMirror blockquote p {
+  margin: 0.3em 0;
+}
+
+/* Code */
+.labs-prose .ProseMirror pre {
+  background: #f4f6f8;
+  border: 1px solid #dce3e8;
+  border-radius: 12px;
+  padding: 0.95em 1.15em;
+  margin: 1.2em 0;
+  overflow-x: auto;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  font-size: 0.855em;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.labs-prose .ProseMirror code {
+  background: #eff2f5;
+  border-radius: 5px;
+  padding: 0.1em 0.36em;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  font-size: 0.86em;
+}
+
+.labs-prose .ProseMirror pre code {
+  background: none;
+  padding: 0;
+  font-size: 1em;
+}
+
+/* Lists */
+.labs-prose .ProseMirror ul,
+.labs-prose .ProseMirror ol {
+  padding-left: 1.35em;
+  margin: 0 0 var(--doc-after);
+}
+
+.labs-prose .ProseMirror ul {
+  list-style: disc;
+}
+
+.labs-prose .ProseMirror ol {
+  list-style: decimal;
+}
+
+.labs-prose .ProseMirror li {
+  margin: 0.3em 0;
+  padding-left: 0.15em;
+}
+
+.labs-prose .ProseMirror li::marker {
+  color: var(--doc-accent);
+}
+
+.labs-prose .ProseMirror li p {
+  margin: 0.1em 0;
+}
+
+.labs-prose .ProseMirror li>ul,
+.labs-prose .ProseMirror li>ol {
+  margin: 0.25em 0;
+}
+
+/* Task lists */
+.labs-prose .ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.labs-prose .ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6em;
+  margin: 0.35em 0;
+  padding-left: 0;
+}
+
+.labs-prose .ProseMirror ul[data-type="taskList"] li>label {
+  margin-top: 0.4em;
+  flex-shrink: 0;
+  display: inline-flex;
+  user-select: none;
+}
+
+.labs-prose .ProseMirror ul[data-type="taskList"] li>div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.labs-prose .ProseMirror ul[data-type="taskList"] input[type="checkbox"] {
+  appearance: none;
+  width: 1.05em;
+  height: 1.05em;
+  border: 1.5px solid var(--doc-table-border);
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  position: relative;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.labs-prose .ProseMirror ul[data-type="taskList"] input[type="checkbox"]:hover {
+  border-color: var(--doc-accent);
+}
+
+.labs-prose .ProseMirror ul[data-type="taskList"] input[type="checkbox"]:checked {
+  background: var(--doc-accent);
+  border-color: var(--doc-accent);
+}
+
+.labs-prose .ProseMirror ul[data-type="taskList"] input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 0.26em;
+  top: 0.08em;
+  width: 0.3em;
+  height: 0.55em;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.labs-prose .ProseMirror ul[data-type="taskList"] li[data-checked="true"]>div {
+  color: var(--doc-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--doc-muted);
+}
+
+/* Tables */
+.labs-prose .ProseMirror table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: 100%;
+  margin: 1.4em 0;
+  font-size: inherit;
+  line-height: inherit;
+  border: 1px solid var(--table-border, var(--doc-table-border));
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.labs-prose .ProseMirror th,
+.labs-prose .ProseMirror td {
+  border-right: 0;
+  border-bottom: 1px solid var(--table-border, var(--doc-table-border));
+  padding: var(--table-padding, var(--doc-table-padding));
+  vertical-align: top;
+  position: relative;
+}
+
+.labs-prose .ProseMirror th:last-child,
+.labs-prose .ProseMirror td:last-child {
+  border-right: none;
+}
+
+.labs-prose .ProseMirror tr:last-child td {
+  border-bottom: none;
+}
+
+.labs-prose .ProseMirror th {
+  background: var(--table-header, var(--doc-table-header));
+  color: var(--table-header-ink, var(--doc-table-header-ink));
+  font-weight: 650;
+  text-align: inherit;
+}
+
+.labs-prose .ProseMirror tbody tr:nth-child(odd) td {
+  background: var(--table-stripe, var(--doc-table-stripe));
+}
+
+.labs-prose[data-table-variant="grid"] .ProseMirror table:not([data-table-variant]) :is(td, th),
+.labs-prose .ProseMirror table[data-table-variant="grid"] :is(td, th) {
+  border-right: 1px solid var(--table-border, var(--doc-table-border));
+}
+.labs-prose[data-table-variant="minimal"] .ProseMirror table:not([data-table-variant]),
+.labs-prose .ProseMirror table[data-table-variant="minimal"] { border-left: 0; border-right: 0; border-radius: 0; }
+.labs-prose[data-table-variant="minimal"] .ProseMirror table:not([data-table-variant]) td,
+.labs-prose .ProseMirror table[data-table-variant="minimal"] td { background: transparent; }
+.labs-prose[data-table-variant="grid"] .ProseMirror table:not([data-table-variant]) td,
+.labs-prose .ProseMirror table[data-table-variant="grid"] td { background: transparent; }
+.labs-prose .ProseMirror td { text-align: inherit; }
+.labs-prose .ProseMirror th p, .labs-prose .ProseMirror td p { color: inherit; }
+
+.labs-prose .ProseMirror th p,
+.labs-prose .ProseMirror td p {
+  margin: 0;
+}
+
+.labs-prose .ProseMirror .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: hsl(var(--primary) / 0.12);
+  pointer-events: none;
+}
+
+.labs-prose .ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: hsl(var(--primary) / 0.6);
+}
+
+.labs-prose .ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+/* Rule + links */
+.labs-prose .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--doc-table-border);
+  margin: 2em 0;
+}
+
+.labs-prose .ProseMirror hr.ProseMirror-selectednode {
+  border-top-color: hsl(var(--primary));
+}
+
+.labs-prose .ProseMirror a {
+  color: var(--doc-accent);
+  text-decoration: underline;
+  text-decoration-color: var(--doc-accent);
+  text-underline-offset: 3px;
+}
+
+.labs-prose .ProseMirror a:hover {
+  text-decoration-color: var(--doc-accent);
+}
+
+/* Placeholder */
+.labs-prose .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--doc-muted);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+/* While the agent writes, the document is read-only: keep it calm, not greyed */
+.labs-prose .ProseMirror[contenteditable="false"] {
+  cursor: default;
+}
+
+/* ── Review (decorations + per-block controls) ────────────────────────────── */
+
+.labs-prose .ProseMirror .labs-review-added,
+.labs-prose .ProseMirror .labs-review-modified {
+  border-radius: 3px;
+  box-shadow: -14px 0 0 0 var(--labs-review-tint), 14px 0 0 0 var(--labs-review-tint);
+  background: var(--labs-review-tint);
+  position: relative;
+  transition: background 320ms ease, box-shadow 320ms ease;
+}
+
+.labs-prose .ProseMirror .labs-review-added {
+  --labs-review-tint: hsl(152 60% 48% / 0.11);
+}
+
+.labs-prose .ProseMirror .labs-review-modified {
+  --labs-review-tint: hsl(38 92% 55% / 0.12);
+}
+
+.labs-prose .ProseMirror .labs-review-added::before,
+.labs-prose .ProseMirror .labs-review-modified::before {
+  content: "";
+  position: absolute;
+  left: -22px;
+  top: 2px;
+  bottom: 2px;
+  width: 2.5px;
+  border-radius: 2px;
+}
+
+.labs-prose .ProseMirror .labs-review-added::before {
+  background: hsl(152 60% 45%);
+}
+
+.labs-prose .ProseMirror .labs-review-modified::before {
+  background: hsl(38 92% 52%);
+}
+
+.light .labs-prose .ProseMirror .labs-review-added {
+  --labs-review-tint: hsl(152 55% 42% / 0.13);
+}
+
+.light .labs-prose .ProseMirror .labs-review-modified {
+  --labs-review-tint: hsl(38 90% 48% / 0.16);
+}
+
+/* Floating Keep/Reject attached to the hovered block */
+.labs-block-actions {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--popover));
+  box-shadow: 0 6px 20px hsl(0 0% 0% / 0.28);
+}
+
+.light .labs-block-actions {
+  box-shadow: 0 6px 20px hsl(220 40% 20% / 0.12);
+}
+
+.labs-block-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+}
+
+.labs-block-actions button:hover {
+  background: hsl(var(--foreground) / 0.07);
+  color: hsl(var(--foreground));
+}
+
+.labs-block-actions button.labs-keep:hover {
+  color: hsl(152 60% 45%);
+  background: hsl(152 60% 45% / 0.12);
+}
+
+.labs-block-actions button.labs-reject:hover {
+  color: hsl(0 72% 60%);
+  background: hsl(0 72% 60% / 0.12);
+}
+
+/* Word diff (assistant pane) */
+.labs-diff-add {
+  color: hsl(152 60% 45%);
+  background: hsl(152 60% 45% / 0.12);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.labs-diff-del {
+  color: hsl(0 72% 60%);
+  background: hsl(0 72% 60% / 0.1);
+  border-radius: 3px;
+  padding: 0 2px;
+  text-decoration: line-through;
+}
+
+/* ── Chrome bits ──────────────────────────────────────────────────────────── */
+
+/* The split handle: a 1px seam that thickens on hover/drag */
+.labs-resizer {
+  position: relative;
+  flex: 0 0 auto;
+  width: 9px;
+  margin: 0 -4px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 10;
+  background: transparent;
+}
+
+.labs-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: hsl(var(--border));
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.labs-resizer:hover::after,
+.labs-resizer[data-dragging="true"]::after {
+  background: hsl(var(--primary) / 0.75);
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3);
+}
+
+/* Assistant surface */
+.labs-assistant {
+  background: hsl(var(--card));
+}
+
+/* In light mode --card and --background are both white, so the assistant
+   gets the popover tint to keep the two panes readable as separate zones. */
+.light .labs-assistant {
+  background: hsl(var(--popover));
+}
+
+.labs-assistant-messages {
+  overscroll-behavior: contain;
+}
+
+/* The one-line run status */
+.labs-status {
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--foreground) / 0.03);
+}
+
+.labs-status[data-live="true"] {
+  border-color: hsl(var(--primary) / 0.35);
+  background: hsl(var(--primary) / 0.06);
+}
+
+.labs-status-steps {
+  border-top: 1px solid hsl(var(--border));
+}
+
+/* Thin indeterminate progress line for a live run */
+@keyframes labsSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.labs-sweep {
+  position: relative;
+  height: 1.5px;
+  overflow: hidden;
+  background: hsl(var(--primary) / 0.14);
+}
+
+.labs-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 25%;
+  background: hsl(var(--primary));
+  animation: labsSweep 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Dropdown / palette surfaces */
+.labs-pop {
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--popover));
+  border-radius: 14px;
+  box-shadow: 0 18px 50px hsl(0 0% 0% / 0.42);
+}
+
+.light .labs-pop {
+  box-shadow: 0 18px 50px hsl(220 40% 20% / 0.16);
+}
+
+/* Keyboard hint */
+.labs-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--foreground) / 0.05);
+  font-size: 10px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  color: hsl(var(--muted-foreground));
+  line-height: 1;
+}
+
+/* Segmented control (mobile tabs) */
+.labs-segment {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 10px;
+  background: hsl(var(--foreground) / 0.06);
+}
+
+.labs-segment button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.labs-segment button[data-active="true"] {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  box-shadow: 0 1px 3px hsl(0 0% 0% / 0.2);
+}
+
+.light .labs-segment button[data-active="true"] {
+  box-shadow: 0 1px 3px hsl(220 40% 20% / 0.1);
+}
+
+/* Bubble menu surface */
+.labs-bubble {
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--popover));
+  border-radius: 12px;
+  box-shadow: 0 12px 36px hsl(0 0% 0% / 0.4);
+}
+
+.light .labs-bubble {
+  box-shadow: 0 12px 36px hsl(220 40% 20% / 0.14);
+}
+
+/* Thin scrollbars inside Labs panes follow the app's custom-scrollbar rules */
+.labs-scroll {
+  scrollbar-width: thin;
+}
+
+/* A small visual style library, not another permanent workspace pane. */
+.labs-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+.labs-theme-choice {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  text-align: left;
+  transition: border-color 140ms, background 140ms;
+}
+.labs-theme-choice:hover { border-color: hsl(var(--primary) / .6); }
+.labs-theme-choice[aria-pressed="true"] { border-color: hsl(var(--primary)); background: hsl(var(--primary) / .07); }
+.labs-theme-choice:disabled { opacity: .5; cursor: wait; }
+.labs-theme-sample { display: block; background: #fff; border-radius: 4px; padding: 10px; min-height: 92px; }
+.labs-theme-letter { display: block; font-size: 26px; line-height: 1; letter-spacing: -1px; }
+.labs-theme-lines { display: grid; gap: 4px; margin: 8px 0; }
+.labs-theme-lines i { display: block; height: 2px; background: currentColor; opacity: .25; }
+.labs-theme-lines i:last-child { width: 75%; }
+.labs-theme-table { display: grid; border-radius: 2px; overflow: hidden; }
+.labs-theme-table i { display: block; height: 5px; border-bottom: 1px solid #ffffff70; }
+.labs-style-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(85px, 1fr)); gap: 10px; }
+.labs-style-fields label { display: flex; flex-direction: column; gap: 5px; font-size: 10px; color: hsl(var(--muted-foreground)); }
+.labs-style-fields select, .labs-style-fields input {
+  width: 100%; min-width: 0; height: 30px; border: 1px solid hsl(var(--border));
+  background: hsl(var(--background)); color: hsl(var(--foreground)); border-radius: 6px; padding: 3px 5px; font-size: 11px;
+}
+.labs-style-fields input[type="color"] { cursor: pointer; }
+.labs-style-fields select:focus-visible, .labs-theme-choice:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
+@media (max-width: 900px) {
+  .labs-theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .labs-theme-choice { transition: none; }
+  .labs-sweep::after { animation: none; }
+}

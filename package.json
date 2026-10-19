@@ -13,11 +13,14 @@
     "start": "node server/index.js"
   },
   "dependencies": {
+    "@ai-sdk/google": "^4.0.93",
+    "ai": "^7.0.137",
     "dotenv": "^16.4.5",
     "eventsource-parser": "^1.1.2",
     "express": "^4.19.2",
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
-    "morgan": "^1.10.0"
+    "morgan": "^1.10.0",
+    "zod": "^4.6.5"
   }
 }

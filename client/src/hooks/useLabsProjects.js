@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { stripMetadata } from "../utils/contentUtils.js";
+import { useEffect, useMemo, useState, useCallback } from "react";
 
 // Storage key
 const STORAGE_KEY = "labs_projects_global";
@@ -28,14 +27,16 @@ function loadProjects() {
 }
 
 /**
- * Save projects to localStorage
+ * Save projects to localStorage. Returns true on success, false on failure
+ * (e.g. quota exceeded) so the UI can show an honest storage warning.
  */
 function saveProjects(projects) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-    console.log(`[Labs] Saved ${projects.length} projects`);
+    return true;
   } catch (e) {
-    console.error("[Labs] Save error:", e);
+    console.error("[Labs] Save error (storage may be full):", e?.name || e);
+    return false;
   }
 }
 
@@ -54,7 +55,8 @@ export function useLabsProjects() {
     return loaded.length > 0 ? loaded[0].id : "";
   });
 
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [storageStatus, setStorageStatus] = useState("ok"); // 'ok' | 'full'
+  const [lastSavedAt, setLastSavedAt] = useState(0);
 
   // Get active project
   const activeProject = useMemo(() => {
@@ -78,10 +80,12 @@ export function useLabsProjects() {
       .catch(() => { });
   }, []);
 
-  // Save to localStorage whenever projects change
+  // Save to localStorage whenever projects change; surface quota failures.
   useEffect(() => {
     if (projects.length > 0) {
-      saveProjects(projects);
+      const ok = saveProjects(projects);
+      setStorageStatus(ok ? "ok" : "full");
+      if (ok) setLastSavedAt(Date.now());
     }
   }, [projects]);
 
@@ -95,7 +99,9 @@ export function useLabsProjects() {
         name: "Untitled Project",
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        document: ""
+        document: "",
+        content: null,
+        chat: []
       };
       setProjects([newProject]);
       setActiveProjectIdState(newProject.id);
@@ -126,37 +132,80 @@ export function useLabsProjects() {
   /**
    * Create new project
    */
-  const handleNewProject = useCallback((name = "Untitled Project", document = "") => {
+  const handleNewProject = useCallback((name = "Untitled Project", document = "", content = null, chat = []) => {
     const newProject = {
       id: crypto.randomUUID(),
       sessionId: crypto.randomUUID(),
       name,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      document
+      document,
+      content,
+      chat
     };
     setProjects(prev => [newProject, ...prev]);
     setActiveProjectIdState(newProject.id);
-    console.log(`[Labs] Created: ${name}`);
+    console.log("[Labs] Created project:", name);
     return newProject;
   }, []);
 
   /**
    * Import document
+   * .docx: mammoth HTML conversion -> sanitize (untrusted input) -> Tiptap
+   * content JSON with block ids; the markdown document is derived from it.
+   * .txt/.md: kept as raw markdown and converted on first open (migration).
    */
   const handleImportDocument = useCallback(async (file) => {
     if (!file) return null;
     const name = file.name.replace(/\.(txt|md|docx)$/i, "") || "Imported";
     let content = "";
+    let contentJSON = null;
+    let derivedDocument = "";
     try {
       if (file.name.endsWith(".docx")) {
-        const mammoth = await import("mammoth");
+        const [{ convertToHtml }, { sanitizeDocxHtml }, { generateJSON }, labExt, bridge] = await Promise.all([
+          import("mammoth"),
+          import("../labs/importSanitizer.js"),
+          import("@tiptap/core"),
+          import("../labs/extensions/buildExtensions.js"),
+          import("../labs/bridge/markdown.js")
+        ]);
         const buffer = await file.arrayBuffer();
-        const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-        content = result.value || "";
-      } else {
-        content = await file.text();
+        const result = await convertToHtml({ arrayBuffer: buffer });
+        const html = sanitizeDocxHtml(result.value || "");
+        contentJSON = generateJSON(html, labExt.buildLabsExtensions());
+        // Assign block ids to top-level nodes so the content is stable
+        // before the editor ever opens it.
+        const idSet = new Set();
+        contentJSON.content = (contentJSON.content || []).map((node) => {
+          const attrs = { ...(node.attrs || {}) };
+          if (!attrs.blockId) {
+            let id;
+            do {
+              const bytes = new Uint8Array(4);
+              crypto.getRandomValues(bytes);
+              id = "b_" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+            } while (idSet.has(id));
+            idSet.add(id);
+            attrs.blockId = id;
+          }
+          return { ...node, attrs };
+        });
+        contentJSON.documentSource = "docx-import";
+        const blocks = bridge.editorToBlocks(contentJSON, (used) => {
+          let id;
+          do {
+            const bytes = new Uint8Array(4);
+            crypto.getRandomValues(bytes);
+            id = "b_" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+          } while (used.has(id));
+          used.add(id);
+          return id;
+        });
+        derivedDocument = bridge.blocksToMarkdownDocument(blocks);
+        return handleNewProject(name, derivedDocument, contentJSON);
       }
+      content = await file.text();
       return handleNewProject(name, content);
     } catch (e) {
       console.error("[Labs] Import error:", e);
@@ -192,7 +241,7 @@ export function useLabsProjects() {
   }, []);
 
   /**
-   * Update document
+   * Update document (legacy textarea path — kept for the v1 fallback)
    */
   const handleUpdateDocument = useCallback((newDocument) => {
     if (!activeProjectId) return;
@@ -204,72 +253,39 @@ export function useLabsProjects() {
   }, [activeProjectId]);
 
   /**
-   * AI Edit
+   * Update the Tiptap content (source of truth) + the derived markdown
+   * document. `extras.documentSource` (migration) preserves the original
+   * document string untouched.
    */
-  const handleAIEdit = useCallback(async (instruction) => {
-    if (!activeProject) return null;
-    setIsProcessing(true);
-    console.log(`[Labs] AI Edit with session: ${activeProject.sessionId}`);
-
-    try {
-      const response = await fetch("/labs-edit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          document: activeProject.document,
-          instruction,
-          sessionId: activeProject.sessionId
-        })
-      });
-
-      if (!response.ok) {
-        const err = await response.text().catch(() => "");
-        throw new Error(err || `Request failed (${response.status})`);
+  const handleUpdateContent = useCallback((contentJSON, derivedDocument, extras = {}) => {
+    if (!activeProjectId) return;
+    setProjects(prev => prev.map(p => {
+      if (p.id !== activeProjectId) return p;
+      const next = { ...p, content: contentJSON, document: derivedDocument, updatedAt: Date.now() };
+      if (extras.documentSource && !p.documentSource) {
+        next.documentSource = extras.documentSource;
       }
+      return next;
+    }));
+  }, [activeProjectId]);
 
-      if (!response.body) throw new Error("No response body");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let fullContent = "";
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.text) fullContent += data.text;
-            } catch {
-              fullContent += line.slice(6);
-            }
-          }
-        }
-      }
-
-      if (fullContent) {
-        const cleaned = stripMetadata(fullContent);
-        handleUpdateDocument(cleaned);
-      }
-      return fullContent;
-    } catch (e) {
-      console.error("[Labs] AI edit error:", e);
-      throw e;
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [activeProject, handleUpdateDocument]);
+  /**
+   * Append chat messages (capped to the last 100).
+   */
+  const handleAppendChat = useCallback((entries) => {
+    if (!activeProjectId || !Array.isArray(entries) || entries.length === 0) return;
+    setProjects(prev => prev.map(p => {
+      if (p.id !== activeProjectId) return p;
+      const chat = [...(p.chat || []), ...entries];
+      return { ...p, chat: chat.slice(-100), updatedAt: Date.now() };
+    }));
+  }, [activeProjectId]);
 
   /**
    * Force sync to storage
    */
   const forceSync = useCallback(() => {
-    saveProjects(projects);
+    return saveProjects(projects);
   }, [projects]);
 
   return {
@@ -278,13 +294,15 @@ export function useLabsProjects() {
     activeProjectId,
     setActiveProjectId,
     isProjectLocked,
-    isProcessing,
+    storageStatus,
+    lastSavedAt,
     handleNewProject,
     handleImportDocument,
     handleDeleteProject,
     handleRenameProject,
     handleUpdateDocument,
-    handleAIEdit,
+    handleUpdateContent,
+    handleAppendChat,
     forceSync,
     getModelName,
     labsModelName

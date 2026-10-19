@@ -1,12 +1,21 @@
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
+import { createLabsExportModel, elementStyle, tableCellStyle, documentTitle } from "./labsExportModel.js";
+import { fontStack } from "../labs/styles.js";
 
 /**
  * Converts markdown content to a styled PDF document
- * @param {string} content - Markdown content
+ * @param {string} content - Markdown content (legacy / fallback)
  * @param {string} filename - Name for the exported file (without extension)
+ * @param {object} [options]
+ * @param {object} [options.content] - Full Tiptap document (native print path).
+ * @param {Array} [options.blocks] - Legacy Labs block fallback (native print).
+ * @param {object} [options.documentStyle] - Overrides root document style.
  */
-export async function exportToPdf(content, filename = "document") {
+export async function exportToPdf(content, filename = "document", options = {}) {
+    if (options.content != null || Array.isArray(options.blocks)) {
+        return printLabsDocument(buildLabsPrintHtml(options.content, options.documentStyle, options.blocks, filename));
+    }
     // Create a temporary container to render the content
     const container = document.createElement("div");
     container.style.cssText = `
@@ -22,7 +31,7 @@ export async function exportToPdf(content, filename = "document") {
         line-height: 1.6;
     `;
 
-    // Process the markdown content to HTML with basic styling
+    // Keep the Chat markdown screenshot exporter unchanged.
     const htmlContent = markdownToHtml(content);
     container.innerHTML = htmlContent;
     document.body.appendChild(container);
@@ -66,6 +75,157 @@ export async function exportToPdf(content, filename = "document") {
     } finally {
         // Clean up
         document.body.removeChild(container);
+    }
+}
+
+const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, char => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[char]));
+
+function printStyle(style) {
+    return `font-family:${fontStack(style.fontFamily)};font-size:${style.fontSizePt}pt;line-height:${style.lineHeight};margin-top:${style.spaceBeforePt}pt;margin-bottom:${style.spaceAfterPt}pt;color:${style.textColor};background-color:${style.backgroundColor || "transparent"};text-align:${style.align}`;
+}
+
+function richPrintRuns(runs) {
+    return runs.map(run => {
+        if (run.break) return "<br>";
+        const style = [];
+        if (run.color) style.push(`color:${run.color}`);
+        if (run.backgroundColor) style.push(`background-color:${run.backgroundColor}`);
+        if (run.fontFamily) style.push(`font-family:${fontStack(run.fontFamily)}`);
+        if (run.fontSizePt) style.push(`font-size:${run.fontSizePt}pt`);
+        let text = escapeHtml(run.text).replace(/\n/g, "<br>");
+        if (run.code) text = `<code>${text}</code>`;
+        if (run.bold) text = `<strong>${text}</strong>`;
+        if (run.italic) text = `<em>${text}</em>`;
+        if (run.underline) text = `<u>${text}</u>`;
+        if (run.strike) text = `<s>${text}</s>`;
+        if (style.length) text = `<span style="${escapeHtml(style.join(";"))}">${text}</span>`;
+        return run.href ? `<a href="${escapeHtml(run.href)}" rel="noopener noreferrer">${text}</a>` : text;
+    }).join("");
+}
+
+/** Standalone print HTML with local font fallbacks and no external resource loads. */
+export function buildLabsPrintHtml(content, documentStyle, blocks, filename = "document") {
+    const model = createLabsExportModel(content, documentStyle, blocks);
+    const { theme, elements } = model;
+    function render(element, inherited = {}) {
+        const style = elementStyle(element, model.documentStyle, inherited);
+        const childAttrs = { ...inherited, ...element.attrs };
+        const attr = escapeHtml(printStyle(style));
+        if (element.runs) {
+            const tag = element.type === "heading" ? `h${element.attrs.level}` : element.type === "codeBlock" ? "pre" : "p";
+            const codeStyle = tag === "pre" ? `;font-family:Consolas,monospace;background-color:${style.backgroundColor || theme.soft}` : "";
+            return `<${tag} style="${attr}${codeStyle}">${richPrintRuns(element.runs) || "<br>"}</${tag}>`;
+        }
+        if (["bulletList", "orderedList", "taskList"].includes(element.type)) {
+            const ordered = element.type === "orderedList";
+            const task = element.type === "taskList";
+            const tag = ordered ? "ol" : "ul";
+            const start = ordered ? ` start="${Math.max(1, Math.floor(Number(element.attrs.start)) || 1)}"` : "";
+            return `<${tag}${start}${task ? ' class="task-list"' : ""} style="${attr}">${(element.children || []).map(item =>
+                `<li>${task ? `<span class="task-marker">${item.attrs.checked ? "&#9745;" : "&#9744;"}</span>` : ""}${(item.children || []).map(child => render(child, childAttrs)).join("")}</li>`
+            ).join("")}</${tag}>`;
+        }
+        if (element.type === "table") {
+            const rows = element.children || [];
+            let headerCount = 0;
+            while (rows[headerCount]?.children.length && rows[headerCount].children.every(cell => cell.type === "tableHeader")) headerCount++;
+            const rendered = rows.map((row, index) => `<tr>${row.children.map(cell => {
+                const cellStyle = tableCellStyle(style, cell, index);
+                const tag = cell.type === "tableHeader" ? "th" : "td";
+                const border = `border:0.5pt solid ${style.tableBorderColor};${style.tableVariant !== "grid" ? "border-left:0;border-right:0;" : ""}`;
+                const css = `${printStyle(cellStyle)};${border}padding:${style.tableCellPaddingPt}pt;vertical-align:middle`;
+                return `<${tag}${tag === "th" ? ` scope="${index < headerCount ? "col" : "row"}"` : ""} colspan="${cell.attrs.colspan}" rowspan="${cell.attrs.rowspan}" style="${escapeHtml(css)}">${cell.children.map(child => render(child, cellStyle)).join("")}</${tag}>`;
+            }).join("")}</tr>`);
+            return `<table style="${attr}">${headerCount ? `<thead>${rendered.slice(0, headerCount).join("")}</thead>` : ""}<tbody>${rendered.slice(headerCount).join("")}</tbody></table>`;
+        }
+        if (element.type === "horizontalRule") return `<hr style="border-color:${style.tableBorderColor}">`;
+        const children = (element.children || []).map(child => render(child, childAttrs)).join("");
+        return element.type === "blockquote" ? `<blockquote style="${attr};border-left:2pt solid ${theme.accent}">${children}</blockquote>` : children;
+    }
+    const title = documentTitle(elements);
+    // CSS strings need separate escaping from HTML; in particular a title must
+    // never terminate the style element. No arbitrary CSS or URLs are accepted.
+    const cssTitle = JSON.stringify(title.replace(/\s+/g, " ")).replace(/</g, "\\3c ").replace(/>/g, "\\3e ");
+    return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="description" content="Print / Save PDF. Fonts use installed local faces and fallbacks; no fonts are downloaded or embedded.">
+<title>${escapeHtml(filename || title || "document")}</title>
+<style>
+@page { size:A4; margin:${theme.marginMm}mm;
+    @top-left { content:${cssTitle}; font-family:${fontStack(theme.bodyFont)}; font-size:9pt; color:${theme.muted}; }
+    @bottom-center { content:counter(page); font-family:${fontStack(theme.bodyFont)}; font-size:9pt; color:${theme.muted}; }
+}
+* { box-sizing:border-box; }
+html { color-scheme:light; background:#FFFFFF; }
+body { margin:0; background:#FFFFFF; color:${theme.ink}; font-family:${fontStack(theme.bodyFont)}; font-size:${theme.fontSizePt}pt; line-height:${theme.lineHeight}; }
+body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+p, h1, h2, h3, h4, h5, h6 { white-space:pre-wrap; overflow-wrap:anywhere; }
+p { orphans:2; widows:2; }
+h1, h2, h3, h4, h5, h6 { break-after:avoid-page; page-break-after:avoid; break-inside:avoid; font-weight:700; }
+a { color:inherit; text-decoration:underline; }
+pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:10pt; }
+code { font-family:Consolas,monospace; }
+blockquote { margin-left:0; margin-right:0; padding-left:14pt; }
+ul, ol { padding-left:20pt; }
+li > p:first-child { margin-top:0; }
+.task-list { list-style:none; }
+.task-list > li { position:relative; }
+.task-marker { position:absolute; left:-18pt; }
+table { border-collapse:collapse; width:100%; table-layout:fixed; }
+thead { display:table-header-group; }
+tfoot { display:table-footer-group; }
+tr { break-inside:avoid; page-break-inside:avoid; }
+th, td { overflow-wrap:anywhere; }
+th { font-weight:700; }
+hr { border:0; border-top:0.5pt solid; margin:14pt 0; }
+@media screen { body { max-width:210mm; margin:auto; padding:${theme.marginMm}mm; } }
+</style></head><body>${elements.map(element => render(element)).join("\n")}</body></html>`;
+}
+
+async function printLabsDocument(html) {
+    const frame = document.createElement("iframe");
+    frame.title = "Labs Print / Save PDF";
+    frame.setAttribute("sandbox", "allow-same-origin allow-modals");
+    frame.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;height:297mm;border:0;";
+    let timer;
+    let printWindow;
+    const cleanup = () => {
+        clearTimeout(timer);
+        printWindow?.removeEventListener("afterprint", cleanup);
+        window.removeEventListener("afterprint", cleanup);
+        frame.remove();
+    };
+    try {
+        const loaded = new Promise((resolve, reject) => {
+            frame.onload = resolve;
+            frame.onerror = () => reject(new Error("The print document could not be loaded."));
+        });
+        frame.srcdoc = html;
+        document.body.appendChild(frame);
+        await Promise.race([
+            (async () => {
+                await loaded;
+                await frame.contentDocument?.fonts?.ready;
+            })(),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("The print document timed out while loading.")), 15000); })
+        ]);
+        clearTimeout(timer);
+        printWindow = frame.contentWindow;
+        if (!printWindow || typeof printWindow.print !== "function") throw new Error("Printing is unavailable in this browser.");
+        // Native print may return before the dialog closes. Keep the frame and
+        // its selectable text alive until afterprint, never a short cleanup timer.
+        printWindow.addEventListener("afterprint", cleanup, { once: true });
+        window.addEventListener("afterprint", cleanup, { once: true });
+        void frame.contentDocument.body.offsetHeight;
+        printWindow.focus();
+        printWindow.print();
+        return { mode: "print" };
+    } catch (error) {
+        cleanup();
+        throw error;
     }
 }
 

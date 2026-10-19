@@ -262,7 +262,7 @@ export default function App() {
 
       <main
         className={cn(
-          "relative flex-1 flex flex-col transition-all duration-300 ease-in-out h-full",
+          "relative flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out h-full",
           mainMargin
         )}
       >

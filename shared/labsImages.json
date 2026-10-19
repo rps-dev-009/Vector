@@ -1,0 +1,12 @@
+{
+  "maxCount": 4,
+  "maxBytesPerImage": 2097152,
+  "maxTotalBytes": 8388608,
+  "maxSourceBytes": 10485760,
+  "maxDimension": 2048,
+  "maxSourcePixels": 40000000,
+  "maxNameChars": 160,
+  "jsonBodyLimit": "14mb",
+  "receiptHeader": "X-Labs-Image-Count",
+  "mediaTypes": ["image/png", "image/jpeg", "image/webp"]
+}

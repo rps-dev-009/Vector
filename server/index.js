@@ -4,6 +4,8 @@ const fs = require("fs");
 const morgan = require("morgan");
 const { createParser } = require("eventsource-parser");
 const { loadModelsFromEnv, loadModelsFromEnvDetailed, loadPublicModels } = require("./models");
+const { registerLabsAgentRoute } = require("./labs/route");
+const { labsJsonParser } = require("./labs/images");
 
 /**
  * Load the dedicated Labs model from LABS_MODEL_* env vars.
@@ -33,6 +35,7 @@ require("dotenv").config();
 const DEBUG = process.env.DEBUG === "true";
 
 const app = express();
+app.post("/labs/agent", labsJsonParser);
 app.use(express.json({ limit: "2mb" }));
 app.use(morgan("tiny"));
 
@@ -802,6 +805,9 @@ CRITICAL: Return ONLY the replacement text for the selection. Do not include con
     if (!res.writableEnded) res.end();
   }
 });
+
+// Labs v2: server-side agent editor (direct Gemini via AI SDK, no Flowise)
+registerLabsAgentRoute(app);
 
 // Non-streaming JSON endpoint compatible with Flowise template usage
 app.post("/predict", async (req, res) => {

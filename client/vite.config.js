@@ -24,6 +24,16 @@ export default defineConfig({
       },
       "/models": "http://localhost:3000",
       "/labs-model": "http://localhost:3000",
+      "/labs/agent": {
+        target: "http://localhost:3000",
+        // SSE: disable proxy buffering like the chat path
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes) => {
+            proxyRes.headers["cache-control"] = "no-cache, no-transform";
+            proxyRes.headers["x-accel-buffering"] = "no";
+          });
+        },
+      },
       "/labs-edit": "http://localhost:3000",
       "/labs-edit-selection": "http://localhost:3000",
       "/predict": "http://localhost:3000"
@@ -61,6 +71,25 @@ export default defineConfig({
 
           // PDF/canvas export — only needed in Labs
           "vendor-pdf": ["jspdf", "html2canvas"],
+
+          // Tiptap editor — loaded lazily with the Labs workspace chunk.
+          // (@tiptap/react is NOT listed: listing it hoists react/react-dom
+          // into this chunk, which the main bundle then loads eagerly.
+          // @tiptap/pm also has no root entry — subpaths resolve normally.)
+          "vendor-tiptap": [
+            "@tiptap/core",
+            "@tiptap/starter-kit",
+            "@tiptap/extension-text-style",
+            "@tiptap/extension-highlight",
+            "@tiptap/extension-text-align",
+            "@tiptap/extension-table",
+            "@tiptap/extension-list",
+            "@tiptap/extension-task-list",
+            "@tiptap/extension-task-item",
+            "@tiptap/extensions",
+            "@tiptap/markdown",
+            "diff"
+          ],
 
           // SSE parsing
           "vendor-sse": ["eventsource-parser"]

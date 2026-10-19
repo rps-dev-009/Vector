@@ -1,0 +1,67 @@
+{
+  "defaultPreset": "editorial",
+  "documentStyleId": "__labs_document_style__",
+  "fonts": ["Inter", "Arial", "Georgia", "Cambria", "Calibri", "Verdana", "Times New Roman"],
+  "numberAttrs": {
+    "fontSizePt": [8, 48],
+    "lineHeight": [1, 2.4],
+    "spaceBeforePt": [0, 72],
+    "spaceAfterPt": [0, 72],
+    "tableCellPaddingPt": [3, 18]
+  },
+  "tableColorAttrs": ["tableHeaderBackground", "tableHeaderColor", "tableAlternateBackground", "tableBorderColor"],
+  "tableVariants": ["striped", "grid", "minimal"],
+  "documentNumberAttrs": { "marginMm": [12, 32] },
+  "presets": {
+    "editorial": {
+      "name": "Editorial", "description": "Confident serif titles. Quiet ink and warm paper.",
+      "headingFont": "Georgia", "bodyFont": "Inter", "fontSizePt": 11,
+      "lineHeight": 1.7, "spaceAfterPt": 10, "marginMm": 22,
+      "ink": "#263342", "muted": "#64748B", "accent": "#214F61", "soft": "#EEF5F6",
+      "titleSizePt": 30, "headingSizePt": 19, "subheadingSizePt": 14,
+      "tableHeaderBackground": "#214F61", "tableHeaderColor": "#FFFFFF",
+      "tableAlternateBackground": "#F0F6F7", "tableBorderColor": "#D8E5E8",
+      "tableCellPaddingPt": 8, "tableVariant": "striped"
+    },
+    "executive": {
+      "name": "Executive", "description": "Sharp hierarchy. Deep navy and clean blue accents.",
+      "headingFont": "Inter", "bodyFont": "Inter", "fontSizePt": 11,
+      "lineHeight": 1.65, "spaceAfterPt": 10, "marginMm": 22,
+      "ink": "#243247", "muted": "#64748B", "accent": "#244B87", "soft": "#EEF3FB",
+      "titleSizePt": 28, "headingSizePt": 18, "subheadingSizePt": 13,
+      "tableHeaderBackground": "#203C68", "tableHeaderColor": "#FFFFFF",
+      "tableAlternateBackground": "#EFF4FB", "tableBorderColor": "#D6E0EE",
+      "tableCellPaddingPt": 8, "tableVariant": "striped"
+    },
+    "botanical": {
+      "name": "Botanical", "description": "Natural greens. Thoughtful, spacious, grounded.",
+      "headingFont": "Cambria", "bodyFont": "Calibri", "fontSizePt": 12,
+      "lineHeight": 1.65, "spaceAfterPt": 10, "marginMm": 22,
+      "ink": "#2A3932", "muted": "#68786D", "accent": "#2D634C", "soft": "#EDF5EE",
+      "titleSizePt": 30, "headingSizePt": 19, "subheadingSizePt": 14,
+      "tableHeaderBackground": "#2D634C", "tableHeaderColor": "#FFFFFF",
+      "tableAlternateBackground": "#EFF6EF", "tableBorderColor": "#D7E5D9",
+      "tableCellPaddingPt": 8, "tableVariant": "striped"
+    },
+    "minimal": {
+      "name": "Minimal", "description": "Monochrome precision. Content takes the lead.",
+      "headingFont": "Arial", "bodyFont": "Arial", "fontSizePt": 11,
+      "lineHeight": 1.65, "spaceAfterPt": 10, "marginMm": 22,
+      "ink": "#292D32", "muted": "#6B7280", "accent": "#343B45", "soft": "#F4F5F6",
+      "titleSizePt": 28, "headingSizePt": 18, "subheadingSizePt": 13,
+      "tableHeaderBackground": "#F0F2F4", "tableHeaderColor": "#252B33",
+      "tableAlternateBackground": "#FAFAFB", "tableBorderColor": "#DDE1E6",
+      "tableCellPaddingPt": 8, "tableVariant": "minimal"
+    },
+    "academic": {
+      "name": "Academic", "description": "Classic scholarship, with a cleaner modern rhythm.",
+      "headingFont": "Cambria", "bodyFont": "Cambria", "fontSizePt": 12,
+      "lineHeight": 1.5, "spaceAfterPt": 9, "marginMm": 25,
+      "ink": "#28303D", "muted": "#647084", "accent": "#384C70", "soft": "#F1F4F8",
+      "titleSizePt": 26, "headingSizePt": 17, "subheadingSizePt": 13,
+      "tableHeaderBackground": "#E9EEF5", "tableHeaderColor": "#293E5C",
+      "tableAlternateBackground": "#F6F8FB", "tableBorderColor": "#CBD5E1",
+      "tableCellPaddingPt": 7, "tableVariant": "grid"
+    }
+  }
+}
