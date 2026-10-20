@@ -149,6 +149,8 @@ export default function App() {
     models,
     selectedModelId,
     setSelectedModelId,
+    thinkingLevel,
+    setThinkingLevel,
     selectedModel,
     modelsIssues,
     isModelsLoading,
@@ -229,6 +231,8 @@ export default function App() {
         models={models}
         selectedModelId={selectedModelId}
         onSelectModel={setSelectedModelId}
+        thinkingLevel={thinkingLevel}
+        onThinkingLevelChange={setThinkingLevel}
         isModelsLoading={isModelsLoading}
         modelsError={modelsError}
         modelsIssues={modelsIssues}

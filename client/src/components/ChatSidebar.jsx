@@ -14,6 +14,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { cn } from "../utils/cn.js";
+import ThinkingSelector from "./ThinkingSelector.jsx";
 
 // ── Custom Model Dropdown ──────────────────────────────────────────────────────
 function ModelDropdown({
@@ -47,7 +48,7 @@ function ModelDropdown({
       {/* Label row */}
       <div className="flex items-center justify-between mb-1.5 px-0.5">
         <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-          {isLocked ? "Model (Locked)" : "Model"}
+          Model
         </span>
         <button
           onClick={onReload}
@@ -68,8 +69,8 @@ function ModelDropdown({
           disabled={isLoading || isLocked || !models?.length}
           title={
             isLocked
-              ? "Model locked to this session. Start a new chat to change."
-              : ""
+              ? "Wait for the current response before changing models."
+              : "Switch models without starting a new chat."
           }
           className={cn(
             "w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition-all border",
@@ -177,7 +178,7 @@ function ModelDropdown({
               {modelsError && <div>{modelsError}</div>}
               {!modelsError && !isLoading && !models?.length && (
                 <div className="text-muted-foreground">
-                  Add MODEL_1_NAME / MODEL_1_ID / MODEL_1_HOST to your .env
+                  Configure GEMINI_MODEL_1_ID or MODEL_1_NAME / MODEL_1_ID / MODEL_1_HOST in .env
                 </div>
               )}
               {modelsIssues?.slice(0, 2).map((issue) => (
@@ -197,6 +198,8 @@ export default function ChatSidebar({
   models,
   selectedModelId,
   onSelectModel,
+  thinkingLevel,
+  onThinkingLevelChange,
   isModelsLoading,
   modelsError,
   modelsIssues,
@@ -377,6 +380,13 @@ export default function ChatSidebar({
                   onReload={onReloadModels}
                   modelsError={modelsError}
                   modelsIssues={modelsIssues}
+                />
+
+                <ThinkingSelector
+                  thinking={models?.find(model => model.id === selectedModelId)?.thinking}
+                  value={thinkingLevel}
+                  onChange={onThinkingLevelChange}
+                  disabled={isSessionLocked || isModelsLoading}
                 />
 
                 {/* ── History Section (Collapsible) ── */}

@@ -15,6 +15,7 @@
 const { runLabsAgent, sendEvent } = require("./engine");
 const { validateIncomingBlocks, validateDocumentStyle } = require("./blocks");
 const { validateImages, IMAGE_SPEC } = require("./images");
+const { resolveGoogleModel } = require("../googleModels");
 
 const MAX_INSTRUCTION_CHARS = 10000;
 const MAX_MESSAGES = 10;
@@ -76,7 +77,7 @@ function validateSelection(selection) {
 
 function registerLabsAgentRoute(app) {
   app.post("/labs/agent", async (req, res) => {
-    const { projectId, blocks, documentStyle, instruction, images, messages, selection } = req.body || {};
+    const { projectId, blocks, documentStyle, instruction, images, messages, selection, modelId, thinkingLevel } = req.body || {};
 
     // ── Validation (JSON errors, no stream) ──
     if (typeof projectId !== "string" || projectId.trim() === "" || projectId.length > MAX_PROJECT_ID_CHARS) {
@@ -99,6 +100,15 @@ function registerLabsAgentRoute(app) {
     if (!checkedSelection.ok) return jsonError(res, 400, checkedSelection.error);
     const imageCount = checkedImages.images.length + checkedMessages.messages.reduce((count, m) => count + (m.images?.length || 0), 0);
     const hasImages = imageCount > 0;
+
+    const selected = resolveGoogleModel(process.env, modelId, thinkingLevel, "labs");
+    if (selected.error) return jsonError(res, 400, selected.error);
+    if (!selected.model.supportsTools) {
+      return jsonError(res, 400, "This model does not support Labs document-editing tools. Select a Gemini or Gemma 4 model.");
+    }
+    if (hasImages && !selected.model.supportsUploads) {
+      return jsonError(res, 400, "The selected model does not support image attachments.");
+    }
 
     const apiKey = (process.env.GEMINI_API_KEY || "").trim();
     if (!apiKey) {
@@ -136,6 +146,7 @@ function registerLabsAgentRoute(app) {
         history: checkedMessages.messages,
         selection: checkedSelection.selection,
         projectId,
+        model: selected.model,
         signal: controller.signal
       });
     } catch (err) {

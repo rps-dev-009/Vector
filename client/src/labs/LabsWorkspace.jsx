@@ -32,6 +32,7 @@ import AssistantPane from "./AssistantPane.jsx";
 import { DOCUMENT_STYLE_ID } from "./styles.js";
 import { useLabsImages } from "./hooks/useLabsImages.js";
 import { IMAGE_ONLY_INSTRUCTION, imageForRequest, imageMetadata, imageHistory, rememberImages } from "./imageAttachments.js";
+import ThinkingSelector from "../components/ThinkingSelector.jsx";
 
 const ASSISTANT_MIN = 320;
 const ASSISTANT_MAX = 720;
@@ -103,6 +104,12 @@ function captureSelection(editor) {
 
 export default function LabsWorkspace({
   activeProject,
+  models = [],
+  modelsError,
+  selectedModel,
+  thinkingLevel,
+  onSelectModel,
+  onThinkingLevelChange,
   onUpdateContent,
   onAppendChat,
   storageStatus,
@@ -366,6 +373,8 @@ export default function LabsWorkspace({
 
       agent.start(() => ({
         projectId: activeProject.id,
+        modelId: selectedModel?.id,
+        thinkingLevel: thinkingLevel || undefined,
         blocks: editorToBlocks(editor.getJSON(), (used) => generateClientBlockId(used)),
         documentStyle: editor.state.doc.attrs.documentStyle,
         instruction: requestText,
@@ -375,7 +384,7 @@ export default function LabsWorkspace({
       }));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [editor, agent, activeProject, onAppendChat, imageCache, imageDraft]
+    [editor, agent, activeProject, onAppendChat, imageCache, imageDraft, selectedModel, thinkingLevel]
   );
 
   /* ── Review actions ── */
@@ -500,6 +509,20 @@ export default function LabsWorkspace({
 
   const assistant = (
     <AssistantPane
+      modelControls={models.length > 0 ? (
+        <div className="grid min-w-0 grid-cols-2 gap-2 border-b border-border px-3 py-2">
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] text-muted-foreground">
+            <span className="font-semibold uppercase tracking-wider">Model</span>
+            <select aria-label="Labs model" value={selectedModel?.id || ""}
+              onChange={event => onSelectModel(event.target.value)} disabled={isRunning}
+              className="w-full min-w-0 rounded-lg border border-border bg-popover px-2 py-2 text-xs text-foreground disabled:opacity-60">
+              {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+            </select>
+          </label>
+          <ThinkingSelector thinking={selectedModel?.thinking} value={thinkingLevel}
+            onChange={onThinkingLevelChange} disabled={isRunning} />
+        </div>
+      ) : modelsError ? <p className="border-b border-border px-3 py-2 text-xs text-destructive">{modelsError}</p> : null}
       chat={activeProject?.chat || []}
       run={run}
       instruction={instruction}

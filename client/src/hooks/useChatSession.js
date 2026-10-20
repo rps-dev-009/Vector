@@ -61,13 +61,13 @@ function saveAllSessions(sessions) {
   }
 }
 
-// Session now includes modelId to lock it to that model
+// Keep the last selected model with the conversation, not a model lock.
 function createSession(mode, modelId) {
   return {
     id: crypto.randomUUID(),
     title: "New chat",
     mode,
-    modelId, // Lock session to this model
+    modelId,
     createdAt: Date.now(),
     messages: []
   };
@@ -139,13 +139,6 @@ export function useChatSession() {
 
   const activeSession = sessions.find((item) => item.id === activeSessionId);
 
-  // Session is locked when it has messages - disables model switching
-  // IMPORTANT: This is computed, not stored, so it updates instantly
-  const isSessionLocked = useMemo(() => {
-    if (!activeSession) return false;
-    return (activeSession.messages?.length ?? 0) > 0;
-  }, [activeSession]);
-
   useEffect(() => {
     let isMounted = true;
     const controller = new AbortController();
@@ -175,6 +168,7 @@ export function useChatSession() {
           .map((item) => ({
             id: String(item.id || ""),
             name: String(item.name || ""),
+            thinking: item.thinking,
             features: {
               uploads: Boolean(item?.features?.uploads),
               tts: Boolean(item?.features?.tts),
@@ -228,19 +222,18 @@ export function useChatSession() {
     }
   }, [activeSession?.mode]);
 
-  // Sync selectedModelId onto the active session while it's still empty
-  // This ensures that if the user changes the model dropdown before typing,
-  // the session remembers this correct new model when it gets locked.
+  // Persist automatic model selection, including fallback after config changes.
   useEffect(() => {
-    if (activeSession && selectedModelId && !isSessionLocked) {
+    if (activeSession && selectedModelId) {
       if (activeSession.modelId !== selectedModelId) {
         updateSession(activeSession.id, (session) => ({
           ...session,
-          modelId: selectedModelId
+          modelId: selectedModelId,
+          thinkingLevel: undefined
         }));
       }
     }
-  }, [activeSession, selectedModelId, isSessionLocked]);
+  }, [activeSession, selectedModelId]);
 
   // Save sessions globally whenever they change
   useEffect(() => {
@@ -257,6 +250,22 @@ export function useChatSession() {
     return models.find((m) => m.id === selectedModelId) || null;
   }, [models, selectedModelId]);
 
+  const thinkingLevel = selectedModel?.thinking?.levels?.includes(activeSession?.thinkingLevel)
+    ? activeSession.thinkingLevel : selectedModel?.thinking?.defaultLevel || "";
+
+  function handleSelectModel(modelId) {
+    if (isStreaming || modelId === selectedModelId || !models.some(model => model.id === modelId)) return;
+    setSelectedModelId(modelId);
+    if (activeSession) {
+      updateSession(activeSession.id, session => ({ ...session, modelId, thinkingLevel: undefined }));
+    }
+  }
+
+  function setThinkingLevel(level) {
+    if (isStreaming || !activeSession || !selectedModel?.thinking?.levels?.includes(level)) return;
+    updateSession(activeSession.id, session => ({ ...session, thinkingLevel: level }));
+  }
+
   // Handle session selection - auto-switch model to match session
   function handleSelectSession(sessionId) {
     const session = sessions.find(s => s.id === sessionId);
@@ -264,7 +273,7 @@ export function useChatSession() {
       setActiveSessionId(sessionId);
       // If the session has a modelId, switch to it
       if (session.modelId) {
-        setSelectedModelId(session.modelId);
+        setSelectedModelId(models.some(model => model.id === session.modelId) ? session.modelId : models[0]?.id || "");
       }
     }
   }
@@ -317,6 +326,8 @@ export function useChatSession() {
     const assistantMessage = {
       id: crypto.randomUUID(),
       role: "assistant",
+      modelId: selectedModelId,
+      thinkingLevel,
       content: "",
       activities: [],
       createdAt: Date.now()
@@ -394,6 +405,9 @@ export function useChatSession() {
         body: JSON.stringify({
           message: userMessage.content,
           modelId: selectedModelId,
+          thinkingLevel: thinkingLevel || undefined,
+          messages: activeSession.messages.filter(msg => msg.content && ["user", "assistant"].includes(msg.role))
+            .map(msg => ({ role: msg.role, content: msg.content })),
           mode,
           sessionId: activeSession.id,
           uploads: uploads.length > 0 ? uploads : undefined
@@ -584,7 +598,9 @@ export function useChatSession() {
   return {
     models,
     selectedModelId,
-    setSelectedModelId,
+    setSelectedModelId: handleSelectModel,
+    thinkingLevel,
+    setThinkingLevel,
     modelsIssues,
     isModelsLoading,
     modelsError,
@@ -597,7 +613,7 @@ export function useChatSession() {
     activeSessionId,
     setActiveSessionId,
     handleSelectSession, // Use this instead of setActiveSessionId for history clicks
-    isSessionLocked, // True when viewing a session that's locked to a specific model
+    isSessionLocked: isStreaming,
     message,
     setMessage,
     isStreaming,

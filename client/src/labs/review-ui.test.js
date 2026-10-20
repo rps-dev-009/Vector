@@ -7,6 +7,10 @@ import { restoreEntries } from "./applyEdit.js";
 
 let root, host, editor, stream;
 const noOp = () => {};
+const models = [
+  { id: "gemini-3.5-flash-lite", name: "Gemini", thinking: { levels: ["minimal", "low", "medium", "high"], defaultLevel: "medium" } },
+  { id: "gemma-4-31b-it", name: "Gemma", thinking: { levels: ["minimal", "high"], defaultLevel: "high" } }
+];
 const ready = value => { editor = value; };
 const initial = {
   id: "review-test", name: "Review test", document: "Original document", chat: [],
@@ -30,7 +34,12 @@ afterEach(async () => {
 });
 function Harness() {
   const [project, setProject] = useState(initial);
+  const [modelId, setModelId] = useState(models[0].id);
+  const [level, setLevel] = useState("");
+  const selectedModel = models.find(model => model.id === modelId);
   return React.createElement(LabsWorkspace, {
+    models, selectedModel, thinkingLevel: level || selectedModel.thinking.defaultLevel,
+    onSelectModel: id => { setModelId(id); setLevel(""); }, onThinkingLevelChange: setLevel,
     activeProject: project, onUpdateContent: (content, document) => setProject(p => ({ ...p, content, document, updatedAt: Date.now() })),
     onAppendChat: messages => setProject(p => ({ ...p, chat: [...p.chat, ...messages] })),
     storageStatus: "ok", onSaveStatusChange: noOp, assistantOpen: true, onToggleAssistant: noOp,
@@ -66,6 +75,35 @@ const button = label => [...host.querySelectorAll("button")].find(b => b.textCon
 const block = id => editor.getJSON().content.find(n => n.attrs?.blockId === id);
 
 describe("review controls through real workspace and SSE", () => {
+  it("switches model and thinking in the same workspace and sends preserved project context", async () => {
+    await mount();
+    const originalEditor = editor;
+    const originalDoc = editor.getJSON();
+    await send("First request");
+    await emit([done]);
+    await act(async () => {
+      const select = host.querySelector('[aria-label="Labs model"]');
+      select.value = models[1].id;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const thinking = host.querySelector('[aria-label="Thinking level"]');
+    expect([...thinking.options].map(option => option.value)).toEqual(["minimal", "high"]);
+    expect(thinking.value).toBe("high");
+    await act(async () => {
+      thinking.value = "minimal";
+      thinking.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await send("Second request");
+    const request = JSON.parse(fetch.mock.calls.at(-1)[1].body);
+    expect(request).toMatchObject({ projectId: initial.id, modelId: models[1].id, thinkingLevel: "minimal" });
+    expect(request.messages[0]).toMatchObject({ role: "user", content: "First request" });
+    expect(host.querySelector('[aria-label="Labs model"]').disabled).toBe(true);
+    expect(thinking.disabled).toBe(true);
+    await emit([done]);
+    expect(editor).toBe(originalEditor);
+    expect(editor.getJSON()).toEqual(originalDoc);
+  });
+
   it("Reject all restores the complete original document and removes highlights", async () => {
     await mount(); const before = editor.getJSON(); await send();
     await emit([replacement, done]);

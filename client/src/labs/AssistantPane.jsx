@@ -210,6 +210,7 @@ function ErrorCard({ error, onRetry }) {
 /* ── Pane ─────────────────────────────────────────────────────────────────── */
 
 export default function AssistantPane({
+  modelControls,
   chat,
   run,
   instruction,
@@ -286,6 +287,7 @@ export default function AssistantPane({
 
   return (
     <div className="labs-assistant relative flex h-full min-h-0 w-full flex-col">
+      <div className="shrink-0">{modelControls}</div>
       {/* Messages */}
       <div
         ref={scrollRef}

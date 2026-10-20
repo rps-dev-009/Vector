@@ -34,7 +34,13 @@ export default function LabsArea({ toggleSidebar, sidebarOpen, onProjectLockChan
         handleDeleteProject,
         handleRenameProject,
         handleUpdateContent,
-        handleAppendChat
+        handleAppendChat,
+        labsModels,
+        labsModelsError,
+        labsModel,
+        thinkingLevel,
+        handleSelectModel,
+        handleThinkingLevelChange
     } = useLabsProjects();
 
     const [saveStatus, setSaveStatus] = useState("saved");
@@ -227,6 +233,12 @@ export default function LabsArea({ toggleSidebar, sidebarOpen, onProjectLockChan
                             key={activeProject.id}
                             onEditorReady={handleEditorReady}
                             activeProject={activeProject}
+                            models={labsModels}
+                            modelsError={labsModelsError}
+                            selectedModel={labsModel}
+                            thinkingLevel={thinkingLevel}
+                            onSelectModel={handleSelectModel}
+                            onThinkingLevelChange={handleThinkingLevelChange}
                             onUpdateContent={handleUpdateContent}
                             onAppendChat={handleAppendChat}
                             storageStatus={storageStatus}

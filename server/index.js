@@ -4,6 +4,8 @@ const fs = require("fs");
 const morgan = require("morgan");
 const { createParser } = require("eventsource-parser");
 const { loadModelsFromEnv, loadModelsFromEnvDetailed, loadPublicModels } = require("./models");
+const { loadGoogleModels, resolveGoogleModel, publicGoogleModel } = require("./googleModels");
+const { validateChatHistory, buildGoogleChatMessages, streamGoogleChat, googleChatError } = require("./googleChat");
 const { registerLabsAgentRoute } = require("./labs/route");
 const { labsJsonParser } = require("./labs/images");
 
@@ -48,7 +50,7 @@ const capabilityCache = new Map();
 const CAPABILITY_TTL_MS = 60000;
 
 function sendEvent(res, event, data) {
-  if (res.writableEnded) return;
+  if (res.writableEnded || res.destroyed) return;
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
@@ -265,6 +267,7 @@ async function streamFlowise({
   message,
   mode,
   sessionId,
+  history = [],
   uploads = [],
   signal
 }) {
@@ -274,6 +277,7 @@ async function streamFlowise({
     streaming: true,
     chatId: sessionId,
     overrideConfig: sessionId ? { sessionId } : undefined,
+    history: history.length > 0 ? history : undefined,
     uploads: uploads.length > 0 ? uploads : undefined
   };
 
@@ -530,20 +534,32 @@ app.get("/models", async (req, res) => {
     ...model,
     features: capabilityMap.get(model.id) || { uploads: false, tts: false, stt: false, status: "unknown" }
   }));
-  res.json({ models: enriched, issues });
+  const googleDefault = resolveGoogleModel(process.env).model;
+  const googleModels = (process.env.GEMINI_API_KEY || "").trim() ? loadGoogleModels(process.env)
+    .sort((a, b) => Number(b.modelId === googleDefault?.modelId) - Number(a.modelId === googleDefault?.modelId))
+    .map(model => publicGoogleModel(resolveGoogleModel(process.env, model.modelId).model || model)) : [];
+  const visibleIssues = googleModels.length ? issues.filter(issue =>
+    !issue.startsWith("No model environment variables found") && !issue.startsWith("No complete models found")
+  ) : issues;
+  res.json({ models: [...enriched, ...googleModels], issues: visibleIssues });
 });
 
-// Expose the dedicated Labs model info to the client
+// Labs v2 uses direct Google models, independently of legacy Flowise editing.
 app.get("/labs-model", (req, res) => {
-  const labsModel = loadLabsModel();
-  if (!labsModel) {
-    return res.json({ model: null, error: "No Labs model configured" });
-  }
-  res.json({ model: { name: labsModel.name } });
+  const { model, error } = resolveGoogleModel(process.env, undefined, undefined, "labs");
+  const models = loadGoogleModels(process.env)
+    .sort((a, b) => Number(b.modelId === model?.modelId) - Number(a.modelId === model?.modelId))
+    .map(item => publicGoogleModel(resolveGoogleModel(process.env, item.modelId, undefined, "labs").model || item));
+  res.json({
+    model: model ? publicGoogleModel(model) : null,
+    models,
+    configured: Boolean((process.env.GEMINI_API_KEY || "").trim()),
+    ...(error ? { error } : {})
+  });
 });
 
 app.post("/chat", async (req, res) => {
-  const { message, modelId, mode, sessionId, uploads } = req.body || {};
+  const { message, modelId, mode, sessionId, uploads, thinkingLevel, messages } = req.body || {};
   if (
     !message ||
     typeof message !== "string" ||
@@ -557,6 +573,11 @@ app.post("/chat", async (req, res) => {
     return res.status(400).json({ error: "Invalid message" });
   }
   const safeSessionId = typeof sessionId === "string" && sessionId.trim() ? sessionId.trim().slice(0, 128) : "";
+  const historyResult = validateChatHistory(messages);
+  if (historyResult.error) return res.status(400).json({ error: historyResult.error });
+  const history = historyResult.messages.map(item => ({
+    role: item.role === "user" ? "userMessage" : "apiMessage", content: item.content
+  }));
 
   // Validate uploads if provided
   const safeUploads = Array.isArray(uploads) ? uploads.filter(u =>
@@ -566,10 +587,31 @@ app.post("/chat", async (req, res) => {
     typeof u.mime === "string"
   ) : [];
 
-  // Resolve safe modelId (index-based) to actual model config
+  // Google IDs are allowlisted actual model IDs, not Flowise indices.
+  const googleSelection = resolveGoogleModel(process.env, modelId, thinkingLevel);
+  const googleModel = googleSelection.model;
+  const isGoogleRequest = Boolean(googleModel) || /^(?:models\/)?(?:gemini|gemma)/.test(modelId);
+  if (isGoogleRequest && googleSelection.error) {
+    return res.status(400).json({ error: googleSelection.error });
+  }
+  const googleApiKey = (process.env.GEMINI_API_KEY || "").trim();
+  if (googleModel && !googleApiKey) return res.status(503).json({ error: "Google API key is not configured" });
+  let googleMessages;
+  if (googleModel) {
+    if (uploads !== undefined && (!Array.isArray(uploads) || safeUploads.length !== uploads.length)) {
+      return res.status(400).json({ error: "Invalid attachments" });
+    }
+    try {
+      googleMessages = buildGoogleChatMessages({ model: googleModel, message, messages: historyResult.messages, uploads: safeUploads });
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+  }
+
+  // Retain the existing Flowise index-based resolution.
   const detailed = loadModelsFromEnvDetailed(process.env);
   const idx = Number(modelId);
-  const model = detailed.models.find((item) => item.index === idx);
+  const model = googleModel || detailed.models.find((item) => item.index === idx);
   if (!model) {
     return res.status(404).json({ error: "Model not found" });
   }
@@ -597,12 +639,25 @@ app.post("/chat", async (req, res) => {
     clearActivities();
   });
 
+  if (req.aborted || res.destroyed) controller.abort();
+
   if (controller.signal.aborted) {
     console.warn("[Chat] Request already aborted by client before starting.");
     return res.end();
   }
 
   try {
+    if (googleModel) {
+      await streamGoogleChat({
+        model: googleModel,
+        apiKey: googleApiKey,
+        messages: googleMessages,
+        signal: controller.signal,
+        sendEvent: (event, data) => sendEvent(res, event, data)
+      });
+      sendEvent(res, "done", { ok: true });
+      return;
+    }
     // Attempt streaming first
     await streamFlowise({
       res,
@@ -610,6 +665,7 @@ app.post("/chat", async (req, res) => {
       message,
       mode,
       sessionId: safeSessionId,
+      history,
       uploads: safeUploads,
       signal: controller.signal
     });
@@ -619,12 +675,18 @@ app.post("/chat", async (req, res) => {
     const isAbortError = error?.name === "AbortError";
     console.error(
       `[Chat] Streaming failed (ClientAborted: ${clientAborted}, AbortError: ${isAbortError}):`,
-      error?.message
+      googleModel ? googleChatError(error) : error?.message
     );
 
-    if (clientAborted) {
+    if (clientAborted || (googleModel && isAbortError)) {
       sendEvent(res, "error", { message: "Request was cancelled before completion." });
       sendEvent(res, "done", { ok: false, cancelled: true });
+      return;
+    }
+
+    if (googleModel) {
+      sendEvent(res, "error", { message: googleChatError(error) });
+      sendEvent(res, "done", { ok: false });
       return;
     }
 
@@ -634,7 +696,9 @@ app.post("/chat", async (req, res) => {
       const payload = {
         question: buildPrompt(message, mode),
         chatId: safeSessionId,
-        overrideConfig: safeSessionId ? { sessionId: safeSessionId } : undefined
+        overrideConfig: safeSessionId ? { sessionId: safeSessionId } : undefined,
+        history: history.length > 0 ? history : undefined,
+        uploads: safeUploads.length > 0 ? safeUploads : undefined
       };
 
       if (DEBUG) console.log(`[Flowise Fallback] Fetching URL: ${url}`);
@@ -647,8 +711,7 @@ app.post("/chat", async (req, res) => {
           ...extraHeaders
         },
         body: JSON.stringify(payload),
-        // For fallback, we'll use a fresh fetch without the same abort signal 
-        // to ensure it reaches Flowise even if the streaming connection had a glitch.
+        signal: controller.signal
       });
 
       if (!response.ok) {
@@ -878,9 +941,14 @@ app.get("*", (req, res, next) => {
   next();
 });
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
-  const { models } = loadModelsFromEnvDetailed(process.env);
-  console.log(`Loaded models:`, JSON.stringify(models, null, 2));
-});
+if (require.main === module) {
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => {
+    console.log(`Server running on http://localhost:${port}`);
+    const { models } = loadModelsFromEnvDetailed(process.env);
+    console.log("Loaded Flowise models:", models.map(({ index, name }) => ({ index, name })));
+    console.log("Loaded Google models:", loadGoogleModels(process.env).map(({ modelId, name }) => ({ modelId, name })));
+  });
+}
+
+module.exports = app;

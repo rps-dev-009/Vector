@@ -19,6 +19,7 @@
 const { createLabsTools } = require("./tools");
 const { LABS_SYSTEM_PROMPT } = require("./prompt");
 const { countDuplicateIds, totalRepairs } = require("./validate");
+const { resolveGoogleModel, googleProviderOptions } = require("../googleModels");
 const {
   MAX_BLOCK_CHARS,
   STYLE_SPEC,
@@ -39,7 +40,6 @@ function getConfig() {
   const inlineRaw = (process.env.LABS_INLINE_DOC_CHARS || "").trim();
   return {
     apiKey: (process.env.GEMINI_API_KEY || "").trim(),
-    modelId: (process.env.LABS_LLM_MODEL || "gemini-3.5-flash-lite").trim(),
     // "0" is a valid value (forces outline mode); only fall back when unset.
     // 40k chars covers a ~7-page document, so long assignments stay fully
     // visible instead of dropping to outline mode (which costs extra
@@ -215,9 +215,11 @@ async function runLabsAgent({
   images = [],
   selection,
   projectId,
+  model,
   signal
 }) {
   const config = getConfig();
+  model ||= resolveGoogleModel(process.env, undefined, undefined, "labs").model;
   const startedAt = Date.now();
   const blockCount = doc.length;
   const inline = totalBlockChars(doc) <= config.inlineDocChars;
@@ -319,7 +321,7 @@ async function runLabsAgent({
     const { streamText, isStepCount, createGoogle } = await loadSdk();
     const google = createGoogle({ apiKey: config.apiKey });
     const result = streamText({
-      model: google(config.modelId),
+      model: google(model.modelId),
       instructions: LABS_SYSTEM_PROMPT,
       messages,
       tools,
@@ -329,12 +331,7 @@ async function runLabsAgent({
       // One SDK-level retry for transient failures; the engine adds its own
       // one-time loop retry for pre-edit failures.
       maxRetries: 1,
-      // Gemini 3.5 flash-lite: thinking level MEDIUM (the default MINIMAL can
-      // end multi-step tool tasks too early). No temperature/topK/topP/penalty
-      // options are passed: this model ignores or rejects them.
-      providerOptions: {
-        google: { thinkingConfig: { thinkingLevel: "medium" } }
-      },
+      providerOptions: googleProviderOptions(model),
       onError: ({ error }) => {
         console.error(
           `[Labs Agent] provider stream error: ${friendlyError(error, hasImages).slice(0, 160)}`

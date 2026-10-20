@@ -69,16 +69,41 @@ export function useLabsProjects() {
     return (activeProject.document?.trim().length ?? 0) > 0;
   }, [activeProject]);
 
-  // Fetch Labs model name from server
-  const [labsModelName, setLabsModelName] = useState("");
+  const [labsModels, setLabsModels] = useState([]);
+  const [labsModelsError, setLabsModelsError] = useState("");
   useEffect(() => {
-    fetch("/labs-model")
-      .then(r => r.json())
-      .then(data => {
-        if (data.model?.name) setLabsModelName(data.model.name);
+    const controller = new AbortController();
+    fetch("/labs-model", { signal: controller.signal })
+      .then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "Could not load Labs models.");
+        return data;
       })
-      .catch(() => { });
+      .then(data => {
+        setLabsModels(Array.isArray(data.models) ? data.models : data.model ? [data.model] : []);
+      })
+      .catch(error => {
+        if (error.name !== "AbortError") setLabsModelsError(error.message);
+      });
+    return () => controller.abort();
   }, []);
+
+  const labsModel = labsModels.find(model => model.id === activeProject?.modelId) || labsModels[0] || null;
+  const labsModelName = labsModel?.name || "";
+  const thinkingLevel = labsModel?.thinking?.levels?.includes(activeProject?.thinkingLevel)
+    ? activeProject.thinkingLevel : labsModel?.thinking?.defaultLevel || "";
+
+  const handleSelectModel = useCallback(modelId => {
+    if (modelId === labsModel?.id || !labsModels.some(model => model.id === modelId)) return;
+    setProjects(previous => previous.map(project => project.id === activeProjectId
+      ? { ...project, modelId, thinkingLevel: undefined } : project));
+  }, [labsModels, labsModel, activeProjectId]);
+
+  const handleThinkingLevelChange = useCallback(level => {
+    if (!labsModel?.thinking?.levels?.includes(level)) return;
+    setProjects(previous => previous.map(project => project.id === activeProjectId
+      ? { ...project, modelId: labsModel.id, thinkingLevel: level } : project));
+  }, [labsModel, activeProjectId]);
 
   // Save to localStorage whenever projects change; surface quota failures.
   useEffect(() => {
@@ -305,6 +330,12 @@ export function useLabsProjects() {
     handleAppendChat,
     forceSync,
     getModelName,
-    labsModelName
+    labsModelName,
+    labsModels,
+    labsModelsError,
+    labsModel,
+    thinkingLevel,
+    handleSelectModel,
+    handleThinkingLevelChange
   };
 }
