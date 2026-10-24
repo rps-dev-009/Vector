@@ -23,6 +23,7 @@ const {
   countDuplicateIds
 } = require("../server/labs/validate");
 const { createLabsTools } = require("../server/labs/tools");
+const { validateAttrs, validateIncomingBlocks, STYLE_SPEC } = require("../server/labs/blocks");
 
 let passed = 0;
 let failed = 0;
@@ -425,6 +426,131 @@ async function main() {
   }
 
   /* ── End-of-run duplicate id check ─────────────────────────────────────── */
+
+  {
+    check(STYLE_SPEC.spacer.defaultHeightPt === 144, "spacers default to two inches of blank space");
+    for (const heightPt of [24, 144, 360, null]) {
+      check(validateAttrs("spacer", { heightPt }).ok, `spacer height accepts ${heightPt}`);
+    }
+    for (const heightPt of [0, 23, 361, "144", Infinity, NaN]) {
+      check(!validateAttrs("spacer", { heightPt }).ok, `spacer height rejects ${heightPt}`);
+    }
+    check(!validateAttrs("paragraph", { heightPt: 144 }).ok && !validateAttrs("spacer", { backgroundColor: "blue" }).ok,
+      "spacer geometry cannot be confused with paragraph typography or colored placeholders");
+    check(validateIncomingBlocks([{ id: "s", type: "spacer", text: "", attrs: {} }]).ok,
+      "incoming spacer with inherited height is valid");
+    check(!validateIncomingBlocks([{ id: "s", type: "spacer", text: "Diagram", attrs: {} }]).ok,
+      "incoming spacer cannot contain text");
+  }
+  {
+    const doc = [{ id: "p", type: "paragraph", text: "Keep this explanation.", attrs: {} }];
+    const { tools, edits } = freshHarness(doc);
+    const result = await tools.insert_blocks.execute({ afterId: "p", blocks: [
+      { type: "spacer", attrs: { heightPt: 144 } }, { type: "spacer" }
+    ] });
+    check(result.ok && doc.length === 3 && doc[1].text === "" && doc[1].attrs.heightPt === 144 && doc[2].text === "",
+      "spacer batches insert actual empty regions with optional height and no text");
+    check(edits[1].afterId === edits[0].blockId, "spacers preserve insertion order");
+    const id = result.blockIds[0];
+    const resized = await tools.set_block_attrs.execute({ blockId: id, attrs: { heightPt: 216 } });
+    check(resized.ok && doc[1].attrs.heightPt === 216, "existing blank region can be resized without content edits");
+    const cleared = await tools.set_block_attrs.execute({ blockId: id, attrs: { heightPt: null } });
+    check(cleared.ok && !Object.hasOwn(doc[1].attrs, "heightPt"), "null spacer height resets to shared default");
+    const replaced = await tools.replace_block.execute({ blockId: id, attrs: { heightPt: 180 } });
+    check(replaced.ok && doc[1].text === "" && doc[1].attrs.heightPt === 180, "spacer replacement does not require text");
+    const invalid = await tools.insert_blocks.execute({ afterId: id, blocks: [
+      { type: "spacer" }, { type: "spacer", text: "Not blank" }
+    ] });
+    check(!invalid.ok && doc.length === 3, "invalid spacer content rejects its entire batch");
+    const invalidItems = await tools.insert_block.execute({ type: "spacer", items: ["Not blank"] });
+    check(!invalidItems.ok && doc.length === 3, "spacer cannot smuggle content through list items");
+  }
+  {
+    const doc = [{ id: "p", type: "paragraph", text: "Keep all words.", attrs: {} }];
+    const { tools, edits } = freshHarness(doc, { blankSpaceOnly: true });
+    const calls = [
+      ["insert_block", { afterId: "p", type: "horizontalRule" }],
+      ["insert_blocks", { afterId: "p", blocks: [{ type: "spacer" }, { type: "paragraph", text: "Unrequested flowchart" }] }],
+      ["replace_block", { blockId: "p", text: "New text" }],
+      ["replace_in_block", { blockId: "p", find: "words", replace: "diagram" }],
+      ["delete_block", { blockId: "p" }],
+      ["set_block_attrs", { blockId: "p", attrs: { fontSizePt: 30 } }],
+      ["set_document_style", { style: { preset: "academic" } }]
+    ];
+    for (const [name, input] of calls) {
+      const result = await tools[name].execute(input);
+      check(!result.ok && result.code === "scope_violation", `blank-only scope rejects ${name} content/appearance changes`);
+    }
+    check(edits.length === 0 && doc[0].text === "Keep all words.", "scope failures preserve all content with no partial edits");
+    const inserted = await tools.insert_block.execute({ afterId: "p", type: "spacer", attrs: { heightPt: 144 } });
+    const styled = await tools.set_block_attrs.execute({ blockId: "p", attrs: { spaceAfterPt: 12 } });
+    check(inserted.ok && styled.ok && doc[0].text === "Keep all words.", "blank-only scope permits real blank space and paragraph spacing");
+  }
+
+  {
+    // Regression: the sample assignment stored entire body paragraphs as H2.
+    for (const text of ["Pruning is selective removal of branches. ".repeat(25), "Training\n\nBody explanation.", "x".repeat(241)]) {
+      const doc = [];
+      const { tools, state, edits } = freshHarness(doc);
+      const result = await tools.insert_blocks.execute({ afterId: null, blocks: [
+        { type: "paragraph", text: "Valid body text." },
+        { type: "heading", text, attrs: { level: 2 } }
+      ] });
+      check(!result.ok && /concise single-line/.test(result.error) && doc.length === 0 && state.editCount === 0 && edits.length === 0,
+        "paragraph-sized or multiline heading rejects the whole batch without mutation");
+    }
+  }
+  {
+    const doc = [{ id: "h", type: "heading", text: "Pruning", attrs: { level: 2 } }];
+    const { tools, edits } = freshHarness(doc);
+    const result = await tools.replace_in_block.execute({ blockId: "h", find: "Pruning", replace: "Body explanation. ".repeat(60) });
+    check(!result.ok && doc[0].text === "Pruning" && edits.length === 0, "in-block replacement cannot bypass heading guard");
+  }
+  {
+    const body = "Pruning regulates growth and fruit quality. ".repeat(25).trim();
+    const doc = [{ id: "bad-h", type: "heading", text: body, attrs: { level: 2, fontSizePt: 19, textColor: "blue" } }];
+    const { tools, edits } = freshHarness(doc);
+    const result = await tools.replace_block.execute({ blockId: "bad-h", type: "paragraph", text: body });
+    check(result.ok && doc[0].type === "paragraph" && doc[0].text === body && Object.keys(doc[0].attrs).length === 0,
+      "repairing a prose heading preserves words/id and clears heading overrides");
+    check(edits[0].type === "paragraph" && edits[0].blockId === "bad-h" && Object.keys(edits[0].attrs).length === 0,
+      "conversion event carries new type and complete attribute map");
+    const missingLevel = await tools.replace_block.execute({ blockId: "bad-h", type: "heading", text: "Pruning" });
+    check(!missingLevel.ok && doc[0].text === body, "conversion to heading requires a level without mutating content");
+    const heading = await tools.replace_block.execute({ blockId: "bad-h", type: "heading", text: "Pruning", attrs: { level: 2 } });
+    check(heading.ok && doc[0].type === "heading" && doc[0].attrs.level === 2, "explicit paragraph-to-heading conversion works");
+    const clearLevel = await tools.replace_block.execute({ blockId: "bad-h", text: "Pruning", attrs: { level: null } });
+    check(!clearLevel.ok && doc[0].attrs.level === 2, "rewrites cannot silently clear required heading level");
+  }
+  {
+    const doc = [{ id: "p", type: "paragraph", text: "Body", attrs: { fontSizePt: 19, textColor: "blue" } }];
+    const { tools } = freshHarness(doc);
+    const result = await tools.replace_block.execute({ blockId: "p", text: "Body", attrs: { fontSizePt: null } });
+    check(result.ok && !Object.hasOwn(doc[0].attrs, "fontSizePt") && doc[0].attrs.textColor === "blue", "rewrite honors null attribute clearing");
+  }
+  {
+    const doc = [{ id: "large", type: "paragraph", text: "x".repeat(199995), attrs: {} }];
+    const { tools, edits } = freshHarness(doc);
+    const result = await tools.insert_blocks.execute({ afterId: "large", blocks: [
+      { type: "paragraph", text: "abcd" }, { type: "paragraph", text: "efgh" }
+    ] });
+    check(!result.ok && result.code === "document_limit" && doc.length === 1 && edits.length === 0, "total document growth limit is atomic across a batch");
+  }
+  {
+    const doc = [{ id: "large", type: "paragraph", text: "x".repeat(199999), attrs: {} }, { id: "p", type: "paragraph", text: "a", attrs: {} }];
+    const { tools, edits } = freshHarness(doc);
+    const insert = await tools.insert_block.execute({ afterId: "p", type: "paragraph", text: "b" });
+    const replace = await tools.replace_block.execute({ blockId: "p", text: "ab" });
+    const inBlock = await tools.replace_in_block.execute({ blockId: "p", find: "a", replace: "ab" });
+    check([insert, replace, inBlock].every(result => !result.ok && result.code === "document_limit") && edits.length === 0,
+      "single insert and both replacement tools enforce total document limit");
+  }
+  {
+    const doc = [];
+    const { tools } = freshHarness(doc);
+    const result = await tools.insert_block.execute({ type: "table", header: ["A"], rows: [["one", "must not disappear"]] });
+    check(!result.ok && /cells must not be discarded/.test(result.error) && doc.length === 0, "table rows cannot silently lose extra cells");
+  }
 
   check(countDuplicateIds([{ id: "a" }, { id: "b" }]) === 0, "countDuplicateIds: none");
   check(countDuplicateIds([{ id: "a" }, { id: "a" }]) === 1, "countDuplicateIds: detects one");

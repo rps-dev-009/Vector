@@ -5,8 +5,8 @@
  *
  * Allowed: headings h1-h6, p, strong/b, em/i, u, s, code, pre, a[href],
  * br, hr, ul, ol, li, blockquote, table, thead, tbody, tr, th, td.
- * Everything else is unwrapped (children kept); all attributes are dropped
- * except a[href] (javascript:/data: URIs removed).
+ * Other wrappers are unwrapped; active content is dropped. Preserve only safe
+ * links and bounded list/table structural attributes, never arbitrary styles.
  */
 
 const ALLOWED_TAGS = new Set([
@@ -16,12 +16,13 @@ const ALLOWED_TAGS = new Set([
   "UL", "OL", "LI", "BLOCKQUOTE",
   "TABLE", "THEAD", "TBODY", "TR", "TH", "TD"
 ]);
+const DROP_TAGS = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "SVG", "MATH", "TEMPLATE"]);
 
 function safeHref(value) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
-  if (/^(javascript|data|vbscript):/i.test(trimmed)) return null;
-  return trimmed;
+  if (/[\u0000-\u0020\u007f]/.test(trimmed)) return null;
+  return /^(https?:|mailto:|tel:|#)/i.test(trimmed) ? trimmed : null;
 }
 
 function sanitizeNode(node, parent) {
@@ -31,9 +32,14 @@ function sanitizeNode(node, parent) {
     return;
   }
 
-  const tag = node.tagName;
+  const tag = node.tagName.toUpperCase();
+  if (DROP_TAGS.has(tag)) {
+    parent.removeChild(node);
+    return;
+  }
 
   if (!ALLOWED_TAGS.has(tag)) {
+    for (const child of [...node.childNodes]) sanitizeNode(child, node);
     // Unwrap: move children up, drop the element itself.
     while (node.firstChild) {
       parent.insertBefore(node.firstChild, node);
@@ -42,7 +48,7 @@ function sanitizeNode(node, parent) {
     return;
   }
 
-  // Strip attributes; keep only safe a[href].
+  // Strip appearance and event handlers without destroying list/table structure.
   const attributes = [...node.attributes];
   for (const attr of attributes) {
     if (tag === "A" && attr.name.toLowerCase() === "href") {
@@ -52,6 +58,10 @@ function sanitizeNode(node, parent) {
         continue;
       }
     }
+    const name = attr.name.toLowerCase();
+    const max = tag === "OL" && name === "start" ? 2147483647
+      : ["TH", "TD"].includes(tag) && ["colspan", "rowspan"].includes(name) ? 100 : 0;
+    if (max && /^\d+$/.test(attr.value) && Number(attr.value) >= 1 && Number(attr.value) <= max) continue;
     node.removeAttribute(attr.name);
   }
 

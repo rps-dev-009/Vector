@@ -18,6 +18,7 @@
 
 import { findBlockByPos } from "./applyEdit.js";
 import { editorToBlocks } from "./bridge/markdown.js";
+import { resolveSpacerHeight } from "./styles.js";
 
 export function createReviewStore() {
   let run = null;
@@ -190,6 +191,7 @@ export function createReviewStore() {
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
 function previewOf(node) {
+  if (node.type.name === "spacer") return `Blank space (${resolveSpacerHeight(node.attrs.heightPt)} pt)`;
   let text = "";
   node.descendants((n) => {
     if (n.isText) text += n.text;

@@ -25,6 +25,8 @@ beforeAll(() => {
   globalThis.ResizeObserver ||= class { observe() {} disconnect() {} };
   Element.prototype.scrollTo ||= noOp;
   Element.prototype.scrollIntoView ||= noOp;
+  Range.prototype.getClientRects ||= () => [];
+  Range.prototype.getBoundingClientRect ||= () => new DOMRect();
   window.scrollTo = noOp;
 });
 afterEach(async () => {
@@ -75,6 +77,42 @@ const button = label => [...host.querySelectorAll("button")].find(b => b.textCon
 const block = id => editor.getJSON().content.find(n => n.attrs?.blockId === id);
 
 describe("review controls through real workspace and SSE", () => {
+  it("shows the real partial reason and retains the word target when continuing", async () => {
+    await mount(); await send("Write a full assignment");
+    await emit([replacement, ["done", { ok: true, truncated: true, stopReason: "length_target", wordCount: 900,
+      targetWords: { min: 2500, max: 3500, source: "default" }, editCount: 1 }]]);
+    expect(host.textContent).toContain("outside the requested word range");
+    expect(host.textContent).toContain("900 document words; target 2,500-3,500 words");
+    expect(host.textContent).not.toContain("used all");
+    await act(async () => editor.commands.setTextSelection({ from: 1, to: 4 }));
+    await act(async () => button("Continue the work").click());
+    const request = JSON.parse(fetch.mock.calls.at(-1)[1].body);
+    expect(request.instruction).toBe("Write a full assignment");
+    expect(request.continuation).toEqual({ targetWords: { min: 2500, max: 3500, source: "default" }, failedOperations: [] });
+    expect(request.selection).toBeNull();
+    await emit([done]);
+  });
+
+  it("does not offer a futile continuation after the document size limit", async () => {
+    await mount(); await send();
+    await emit([["done", { ok: true, truncated: true, stopReason: "document_limit", wordCount: 30000, editCount: 0 }]]);
+    expect(host.textContent).toContain("separate document");
+    expect(button("Continue the work")).toBeUndefined();
+  });
+
+  it.each([false, true])("unlocks the workspace after EOF without done and preserves review: %s", async partial => {
+    await mount(); await send();
+    await emit(partial ? [replacement] : []);
+    expect(host.querySelector("textarea").disabled).toBe(false);
+    expect(host.querySelector('[aria-label="Labs model"]').disabled).toBe(false);
+    expect(editor.isEditable).toBe(true);
+    expect(host.textContent).toContain(partial ? "interrupted before completion" : "empty response");
+    if (partial) {
+      expect(block("p1").content[0].text).toBe("AI replacement.");
+      expect(button("Reject all")).toBeTruthy();
+    }
+  });
+
   it("switches model and thinking in the same workspace and sends preserved project context", async () => {
     await mount();
     const originalEditor = editor;

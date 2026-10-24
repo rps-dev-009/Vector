@@ -20,6 +20,8 @@ const {
   DOCUMENT_NUMBER_ATTRS,
   isColorValue,
   MAX_BLOCK_CHARS,
+  MAX_TOTAL_BLOCK_CHARS,
+  totalBlockChars,
   outlineOf,
   generateBlockId,
   validateAttrs,
@@ -32,6 +34,7 @@ const {
   createRepairsCounter,
   isKnownType,
   prepareBlockText,
+  validateHeadingText,
   buildListText,
   normalizeListItems,
   canonicalizeListText,
@@ -44,8 +47,7 @@ const {
 module.exports = {};
 
 const READ_BLOCKS_MAX = 20;
-// insert_blocks writes a whole draft in one call; capped so one call can never
-// blow past the per-request edit budget in a single shot.
+// Bound individual batches; long drafts may use several ordered batches.
 const INSERT_BLOCKS_MAX = 30;
 const STYLE_BLOCKS_MAX = 40;
 
@@ -54,6 +56,8 @@ const nullableNumber = ([min, max]) => z.number().finite().min(min).max(max).nul
 const colorSchema = z.string().refine(isColorValue, "Use a hex color (#abc or #aabbcc) or a supported named color.")
   .nullable().optional().describe("Hex or named color; null clears the override.");
 const attrsSchema = z.object({
+  heightPt: nullableNumber([STYLE_SPEC.spacer.minHeightPt, STYLE_SPEC.spacer.maxHeightPt])
+    .describe("Spacer blocks only: blank height in points (72pt = one inch). Omit or null for 144pt. Never a line or diagram."),
   textColor: colorSchema,
   backgroundColor: colorSchema,
   align: z.enum(ALLOWED_ALIGN).nullable().optional(),
@@ -157,6 +161,7 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
 
   const editLimitError = () => ({
     ok: false,
+    code: "edit_limit",
     error: `Edit limit reached (${maxEdits} edits per request). Stop editing and reply with what you completed.`
   });
 
@@ -171,6 +176,12 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
     error: `Block text is too long (${n} characters). The maximum is ${maxBlockChars} characters per block — split the content into multiple blocks.`
   });
 
+  const documentLimitError = (addedChars) => totalBlockChars(doc) + addedChars > MAX_TOTAL_BLOCK_CHARS ? {
+    ok: false,
+    code: "document_limit",
+    error: `This write would exceed the document limit (${MAX_TOTAL_BLOCK_CHARS} characters). This call made no changes. Keep the remaining material for a separate document.`
+  } : null;
+
   /**
    * Determine the canonical text for a block write, based on the block type
    * and the fields the model provided. Structured input wins; text is a
@@ -182,6 +193,12 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
         ok: false,
         error: `Unknown block type ${JSON.stringify(type)}. Allowed types: ${BLOCK_TYPES.join(", ")}.`
       };
+    }
+    if (type === "spacer") {
+      if (items !== undefined || header !== undefined || rows !== undefined) {
+        return { ok: false, error: "A spacer has no content. Omit text/items/header/rows and set only attrs.heightPt." };
+      }
+      return prepareBlockText({ type, text, state });
     }
     if (LIST_TYPES.includes(type)) {
       if (Array.isArray(items)) {
@@ -303,7 +320,7 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
     }
     const changes = prepared.filter((p) => p.changed);
     if (state.editCount + changes.length > maxEdits) {
-      return { ok: false, error: `This call would exceed the edit limit (${maxEdits} edits per request, ${state.editCount} used). Style fewer blocks; this batch made no changes.` };
+      return { ok: false, code: "edit_limit", error: `This call would exceed the edit limit (${maxEdits} edits per request, ${state.editCount} used). Style fewer blocks; this batch made no changes.` };
     }
     if (changes.length > 0) {
       emitActivity(tool === "set_block_attrs"
@@ -326,7 +343,7 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
 
   const newBlockSchema = z.object({
     type: z.enum(BLOCK_TYPES).describe("Type of the new block."),
-    text: z.string().optional().describe("Markdown text (paragraph, heading, blockquote, codeBlock)."),
+    text: z.string().optional().describe("Markdown content only. Headings must be concise single-line titles, not body paragraphs."),
     items: z
       .array(z.union([z.string(), z.object({ text: z.string(), checked: z.boolean().optional() })]))
       .optional()
@@ -397,6 +414,7 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
       execute: async ({ blockId, find, replace }) => {
         const block = findBlock(blockId);
         if (!block) return notFound(blockId);
+        if (block.type === "spacer") return { ok: false, error: "Spacers contain no text. Use set_block_attrs with heightPt to resize blank space." };
         const unseen = requireSeen(blockId, "edit it");
         if (unseen) return unseen;
         if (typeof find !== "string" || find.trim().length === 0) {
@@ -460,6 +478,12 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
         const next =
           block.text.slice(0, matchStart) + replaceText + block.text.slice(matchEnd);
         if (next.length > maxBlockChars) return overLimit(next.length);
+        if (block.type === "heading") {
+          const heading = validateHeadingText(next);
+          if (!heading.ok) return heading;
+        }
+        const sizeError = documentLimitError(next.length - block.text.length);
+        if (sizeError) return sizeError;
         if (replaceText !== replace) state.newlineNormalized += 1;
         if (usedFallback) state.newlineNormalized += 1;
         emitActivity(`Editing: ${blockLabel(block)}`, "replace_in_block");
@@ -473,9 +497,10 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
 
     replace_block: {
       description:
-        "Replace a whole block's content. For paragraphs, headings, quotes and code pass text. For lists pass items (array of strings, or {text, checked} objects for taskList). For tables pass header and rows.",
+        "Replace a whole block's content. For paragraphs, headings, quotes and code pass text. For lists pass items; for tables pass header and rows. Omit type to keep the block type. Set type only to convert between heading and paragraph when repairing structure; conversion clears old block overrides and preserves the id.",
       inputSchema: z.object({
         blockId: z.string().describe("Id of the block to replace."),
+        type: z.enum(["paragraph", "heading"]).optional().describe("Optional heading/paragraph conversion. A new heading requires attrs.level. Omit for ordinary rewrites."),
         text: z.string().optional().describe("Markdown text (paragraph, heading, blockquote, codeBlock)."),
         items: z
           .array(z.union([z.string(), z.object({ text: z.string(), checked: z.boolean().optional() })]))
@@ -485,17 +510,22 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
         rows: z.array(z.array(z.string())).optional().describe("Table rows, e.g. [[\"chat\", \"coordination\"]]."),
         attrs: attrsSchema.optional()
       }),
-      execute: async ({ blockId, text, items, header, rows, attrs }) => {
+      execute: async ({ blockId, type, text, items, header, rows, attrs }) => {
         const block = findBlock(blockId);
         if (!block) return notFound(blockId);
         const unseen = requireSeen(blockId, "rewrite it");
         if (unseen) return unseen;
         if (state.editCount >= maxEdits) return editLimitError();
-        const checkedAttrs = validateAttrs(block.type, attrs);
+        const targetType = type || block.type;
+        const converting = targetType !== block.type;
+        if (converting && (!["heading", "paragraph"].includes(block.type) || !["heading", "paragraph"].includes(targetType))) {
+          return { ok: false, error: "Type conversion is supported only between heading and paragraph blocks." };
+        }
+        const checkedAttrs = validateAttrs(targetType, attrs);
         if (!checkedAttrs.ok) return checkedAttrs;
 
         const built = buildBlockTextForType({
-          type: block.type,
+          type: targetType,
           text,
           items,
           header,
@@ -504,11 +534,23 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
         if (!built.ok) return built;
         const blockText = built.text;
         if (blockText.length > maxBlockChars) return overLimit(blockText.length);
+        const sizeError = documentLimitError(blockText.length - block.text.length);
+        if (sizeError) return sizeError;
+        const nextAttrs = { ...(converting ? {} : block.attrs), ...checkedAttrs.attrs };
+        for (const [key, value] of Object.entries(attrs || {})) {
+          if (value === null) delete nextAttrs[key];
+        }
+        if (targetType === "heading" && nextAttrs.level == null) {
+          if (built.impliedLevel != null) nextAttrs.level = built.impliedLevel;
+          else return { ok: false, error: "Heading blocks require attrs.level (1-6); it cannot be cleared." };
+        }
+        if (targetType !== "heading") delete nextAttrs.level;
 
         emitActivity(`Rewriting: ${blockLabel(block)}`, "replace_block");
         const before = block.text;
         block.text = blockText;
-        if (attrs) block.attrs = { ...block.attrs, ...checkedAttrs.attrs };
+        block.type = targetType;
+        block.attrs = nextAttrs;
 
         // Warn (without blocking) when a block shrinks by more than 70%.
         const beforeLen = before.trim().length;
@@ -517,7 +559,8 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
 
         state.editCount += 1;
         const edit = { op: "replace", blockId, before, after: blockText };
-        if (attrs) edit.attrs = { ...block.attrs };
+        if (attrs || converting) edit.attrs = { ...block.attrs };
+        if (converting) edit.type = targetType;
         if (largeShrink) {
           edit.warnings = [{ blockId, code: "large_shrink" }];
           state.warnings.push({ blockId, code: "large_shrink" });
@@ -553,6 +596,7 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
         if (state.editCount + blocks.length > maxEdits) {
           return {
             ok: false,
+            code: "edit_limit",
             error: `This call would exceed the edit limit (${maxEdits} edits per request, ${state.editCount} used). Insert fewer blocks.`
           };
         }
@@ -573,6 +617,8 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
           }
           prepared.push(r);
         }
+        const sizeError = documentLimitError(prepared.reduce((sum, block) => sum + block.text.length, 0));
+        if (sizeError) return sizeError;
 
         emitActivity(
           `Writing ${prepared.length} block${prepared.length === 1 ? "" : "s"}`,
@@ -593,7 +639,7 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
 
     insert_block: {
       description:
-        "Insert ONE new block after the block with id `afterId`, or at the start when `afterId` is null. For paragraphs, headings, quotes and code pass text (headings also need attrs.level). For lists pass items. For tables pass header and rows. For two or more blocks use insert_blocks instead. Returns the new block id.",
+        "Insert ONE new block after afterId (null = start). For requested blank space use type spacer, omit text, and set attrs.heightPt (24-360 points, default144). Never use horizontalRule as blank space. For paragraphs/headings/quotes/code pass text; headings need attrs.level. Lists use items; tables use header and rows. For several blocks use insert_blocks. Returns the new block id.",
       inputSchema: z.object({
         afterId: z.string().nullable().optional()
           .describe("Id of the block to insert after, or null to insert at the start."),
@@ -611,6 +657,8 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
         if (state.editCount >= maxEdits) return editLimitError();
         const prepared = prepareNewBlock({ type, text, items, header, rows, attrs });
         if (!prepared.ok) return prepared;
+        const sizeError = documentLimitError(prepared.text.length);
+        if (sizeError) return sizeError;
         const where = indexAfter(afterId);
         if (!where.ok) return where;
 
@@ -695,6 +743,24 @@ function createLabsTools({ doc, documentStyle, emitEdit, emitActivity, limits })
       }
     }
   };
+
+  if (limits.blankSpaceOnly) {
+    for (const [name, tool] of Object.entries(tools)) {
+      if (name === "get_outline" || name === "read_blocks") continue;
+      const execute = tool.execute;
+      tool.execute = async (input, ...rest) => {
+        const spacingAttrs = Object.keys(input.attrs || {}).every(key => ["heightPt", "spaceBeforePt", "spaceAfterPt"].includes(key));
+        const allowed = name === "insert_block" ? input.type === "spacer"
+          : name === "insert_blocks" ? Array.isArray(input.blocks) && input.blocks.every(block => block?.type === "spacer")
+          : ["set_block_attrs", "set_block_styles"].includes(name) && spacingAttrs;
+        if (!allowed) return {
+          ok: false, code: "scope_violation",
+          error: "This request allows blank spacing only. Insert spacer blocks or adjust their height/paragraph spacing. Do not add text, flowcharts, diagrams, labels or horizontal rules, and do not rewrite or delete existing content."
+        };
+        return execute(input, ...rest);
+      };
+    }
+  }
 
   return { tools, state };
 }

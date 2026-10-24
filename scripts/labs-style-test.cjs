@@ -89,7 +89,7 @@ async function main() {
   await test("typed strict nullable schemas cover all block-writing tools", () => {
     const h = harness();
     const allAttrs = {
-      textColor: null, backgroundColor: null, align: null, level: null, language: null, fontFamily: null,
+      textColor: null, backgroundColor: null, align: null, level: null, language: null, fontFamily: null, heightPt: null,
       ...Object.fromEntries(Object.keys(spec.numberAttrs).map((key) => [key, null])),
       tableVariant: null, ...Object.fromEntries(spec.tableColorAttrs.map((key) => [key, null]))
     };

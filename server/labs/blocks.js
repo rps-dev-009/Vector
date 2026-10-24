@@ -27,7 +27,8 @@ const BLOCK_TYPES = [
   "blockquote",
   "codeBlock",
   "table",
-  "horizontalRule"
+  "horizontalRule",
+  "spacer"
 ];
 
 // Size guards (characters, not bytes)
@@ -112,6 +113,19 @@ function validateAttrs(type, attrs) {
   }
   const cleaned = {};
   for (const [key, value] of Object.entries(attrs)) {
+    if (type === "spacer" && key !== "heightPt") {
+      return { ok: false, error: "Blank spacer blocks accept only heightPt, not text, colors, borders or typography." };
+    }
+    if (key === "heightPt") {
+      if (type !== "spacer") return { ok: false, error: "heightPt is only allowed on spacer blocks. Insert a spacer to reserve blank diagram space." };
+      if (value == null) continue;
+      const { minHeightPt, maxHeightPt } = STYLE_SPEC.spacer;
+      if (typeof value !== "number" || !Number.isFinite(value) || value < minHeightPt || value > maxHeightPt) {
+        return { ok: false, error: `heightPt must be a finite number between ${minHeightPt} and ${maxHeightPt} points, or null for the default blank space.` };
+      }
+      cleaned.heightPt = value;
+      continue;
+    }
     if (TABLE_ATTRS.includes(key) && type !== "table") {
       return { ok: false, error: `${key} is only allowed on table blocks. Style a table block or omit this attr.` };
     }
@@ -240,6 +254,9 @@ function validateIncomingBlocks(blocks) {
     }
     if (typeof b.text !== "string") {
       return { ok: false, error: `${where} ("${b.id}") text must be a string.` };
+    }
+    if (b.type === "spacer" && b.text !== "") {
+      return { ok: false, error: `${where} ("${b.id}") is a spacer and must have empty text.` };
     }
     const checked = validateAttrs(b.type, b.attrs);
     if (!checked.ok) {

@@ -110,6 +110,10 @@ export function buildLabsPrintHtml(content, documentStyle, blocks, filename = "d
     const model = createLabsExportModel(content, documentStyle, blocks);
     const { theme, elements } = model;
     function render(element, inherited = {}) {
+        if (element.type === "spacer") {
+            const heightPt = element.attrs.heightPt;
+            return `<div data-type="labs-spacer" data-height-pt="${heightPt}" style="height:${heightPt}pt;margin:0;padding:0;border:0;line-height:0;break-inside:avoid;page-break-inside:avoid"></div>`;
+        }
         const style = elementStyle(element, model.documentStyle, inherited);
         const childAttrs = { ...inherited, ...element.attrs };
         const attr = escapeHtml(printStyle(style));
@@ -147,7 +151,7 @@ export function buildLabsPrintHtml(content, documentStyle, blocks, filename = "d
     const title = documentTitle(elements);
     // CSS strings need separate escaping from HTML; in particular a title must
     // never terminate the style element. No arbitrary CSS or URLs are accepted.
-    const cssTitle = JSON.stringify(title.replace(/\s+/g, " ")).replace(/</g, "\\3c ").replace(/>/g, "\\3e ");
+    const cssTitle = JSON.stringify(documentTitle(elements, 80).replace(/\s+/g, " ")).replace(/</g, "\\3c ").replace(/>/g, "\\3e ");
     return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">

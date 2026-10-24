@@ -112,6 +112,18 @@ function detectInlineList(text) {
   return null;
 }
 
+// This guard applies to AI writes, not imported or manually authored headings.
+function validateHeadingText(text) {
+  const visible = text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[*_`]/g, "").trim();
+  if (/[\r\n]/.test(text) || visible.length > 240 || visible.split(/\s+/).length > 40) {
+    return {
+      ok: false,
+      error: "A heading must be a concise single-line title (at most 40 words and 240 characters), not body prose. Put explanations in separate paragraph blocks using insert_blocks. To repair an existing paragraph stored as a heading, use replace_block with type: paragraph and preserve its text."
+    };
+  }
+  return { ok: true };
+}
+
 /**
  * Validate + auto-repair the raw text for a block type (the four text types
  * and the text-fallback paths for lists/tables). Counts every repair in
@@ -119,6 +131,12 @@ function detectInlineList(text) {
  * Returns { ok, text, impliedLevel? } or { ok:false, error }.
  */
 function prepareBlockText({ type, text, state }) {
+  if (type === "spacer") {
+    if (text != null && (typeof text !== "string" || text.trim() !== "")) {
+      return { ok: false, error: "A spacer is blank: omit text or use an empty string. Do not add labels, diagrams, flowcharts or divider lines." };
+    }
+    return { ok: true, text: "" };
+  }
   if (typeof text !== "string") {
     return { ok: false, error: `A ${type} block requires text (the Markdown content).` };
   }
@@ -174,8 +192,12 @@ function prepareBlockText({ type, text, state }) {
   if (t === "" && !LIST_TYPES.includes(type)) {
     return {
       ok: false,
-      error: `A ${type} block cannot have empty text. Write the content, or use delete_block to remove the block.`
+      error: `A ${type} block cannot have empty text. For requested blank diagram space, insert a spacer with attrs.heightPt (24-360 points, default 144) instead. Do not substitute a horizontal rule or write placeholder text.`
     };
+  }
+  if (type === "heading") {
+    const heading = validateHeadingText(t);
+    if (!heading.ok) return heading;
   }
   // List typed inline into a text block -> reject with the structural fix.
   if (type === "paragraph" || type === "heading" || type === "blockquote") {
@@ -332,6 +354,9 @@ function normalizeTableInput(header, rows, state) {
       if (!Array.isArray(r) || r.some((c) => typeof c !== "string")) {
         return { ok: false, error: "Every table row must be an array of cell strings. Use header and rows." };
       }
+      if (r.length > header.length) {
+        return { ok: false, error: `Table row ${rr.length + 1} has ${r.length} cells but the header has ${header.length}. Add the missing headers or correct the row; cells must not be discarded.` };
+      }
       rr.push(r);
     }
   }
@@ -401,6 +426,7 @@ module.exports = {
   totalRepairs,
   isKnownType,
   detectInlineList,
+  validateHeadingText,
   prepareBlockText,
   parseListLine,
   buildListText,

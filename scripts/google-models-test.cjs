@@ -212,7 +212,7 @@ async function main() {
       sendEvent: (event, data) => events.push({ event, data }) }, sdkMock([
       { type: "reasoning-delta", text: "not exposed" }, { type: "text-delta", text: "Hello" }, { type: "finish", finishReason: "stop" }
     ], calls));
-    assert.deepEqual(events, [{ event: "token", data: { text: "Hello" } }]);
+    assert.deepEqual(events, [{ event: "activity", data: { state: "reasoning" } }, { event: "token", data: { text: "Hello" } }]);
     assert.equal(calls[1].options.maxRetries, 0);
     assert.equal(calls[1].options.abortSignal, signal);
     assert.deepEqual(calls[1].options.providerOptions, { google: { thinkingConfig: { thinkingLevel: "minimal" } } });

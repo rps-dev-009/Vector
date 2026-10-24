@@ -1,5 +1,5 @@
 import { blockToNodeJSON } from "../labs/bridge/markdown.js";
-import { STYLE_SPEC, resolveColor, resolveDocumentStyle, resolveBlockStyle } from "../labs/styles.js";
+import { STYLE_SPEC, resolveColor, resolveDocumentStyle, resolveBlockStyle, resolveSpacerHeight } from "../labs/styles.js";
 
 function exportColor(value, background = false) {
     const color = resolveColor(value, background);
@@ -51,6 +51,7 @@ function inlineRuns(nodes) {
 }
 
 function normalizeNode(node) {
+    if (node.type === "spacer") return { type: "spacer", attrs: { heightPt: resolveSpacerHeight(node.attrs?.heightPt) } };
     const attrs = Object.fromEntries(Object.entries(node.attrs || {}).filter(([, value]) => value != null));
     for (const key of ["textColor", "backgroundColor", ...STYLE_SPEC.tableColorAttrs]) {
         if (attrs[key] && !exportColor(attrs[key], key === "backgroundColor" || key === "tableAlternateBackground")) delete attrs[key];
@@ -113,6 +114,9 @@ export function tableCellStyle(tableStyle, cell, rowIndex) {
     };
 }
 
-export function documentTitle(elements) {
-    return elements.find(element => element.type === "heading")?.runs.map(run => run.text || " ").join("") || "";
+export function documentTitle(elements, maxLength) {
+    const title = elements.find(element => element.type === "heading")?.runs.map(run => run.text || " ").join("") || "";
+    if (!maxLength || title.length <= maxLength) return title;
+    const prefix = title.replace(/\s+/g, " ").slice(0, maxLength - 3);
+    return `${prefix.replace(/\s+\S*$/, "")}...`;
 }

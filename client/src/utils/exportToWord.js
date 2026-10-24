@@ -469,6 +469,14 @@ export function buildLabsWordDocument(content, documentStyle, blocks, tableImage
     const border = (color, minimal = false) => ({ style: minimal ? BorderStyle.NIL : BorderStyle.SINGLE, size: 4, color: hex(color) });
 
     function render(element, context = {}) {
+        // Reserve one image-sized region, never fragments on adjacent pages.
+        if (element.type === "spacer") return [new Paragraph({
+            children: [],
+            spacing: { before: 0, after: 0, line: twips(element.attrs.heightPt), lineRule: LineRuleType.EXACT },
+            keepLines: true,
+            keepNext: false,
+            widowControl: false
+        })];
         const style = elementStyle(element, model.documentStyle, context.inherited);
         if (element.runs) {
             const heading = element.type === "heading";
@@ -617,7 +625,7 @@ export function buildLabsWordDocument(content, documentStyle, blocks, tableImage
                 size: { width: 11906, height: 16838, orientation: "portrait" },
                 margin: { top: margin, right: margin, bottom: margin, left: margin, header: Math.round(margin / 2), footer: Math.round(margin / 2), gutter: 0 }
             } },
-            headers: { default: new Header({ children: [new Paragraph({ style: "LabsRunningText", children: [new TextRun(documentTitle(elements))] })] }) },
+            headers: { default: new Header({ children: [new Paragraph({ style: "LabsRunningText", children: [new TextRun(documentTitle(elements, 80))] })] }) },
             footers: { default: new Footer({ children: [new Paragraph({ style: "LabsRunningText", alignment: AlignmentType.CENTER, children: [new TextRun({ children: [PageNumber.CURRENT] })] })] }) },
             children: children.length ? children : [new Paragraph({ style: "LabsBody" })]
         }]

@@ -105,6 +105,25 @@ describe("Labs rich export model", () => {
 });
 
 describe("Labs DOCX", () => {
+    it("shortens only the running header, never the actual title", async () => {
+        const title = "Principles and Practices of Training and Pruning in Fruit Crops: An Undergraduate Horticulture Assignment";
+        const input = doc([heading(title), paragraph("Body")]);
+        const xml = await unpack(input);
+        expect(wordText(xml.document)).toContain(title);
+        expect(wordText(parseXml(xml.header)).length).toBeLessThanOrEqual(80);
+        expect(wordText(parseXml(xml.header))).toMatch(/\.\.\.$/);
+        const html = parseHtml(buildLabsPrintHtml(input));
+        expect(html.querySelector("h1").textContent).toBe(title);
+        expect(html.querySelector("style").textContent).not.toContain(title);
+    });
+
+    it("retains pasted RGB colors in both export formats", async () => {
+        const input = doc([paragraph([text("Colored", [{ type: "textStyle", attrs: { color: "rgb(33, 79, 97)" } }])])]);
+        const xml = await unpack(input);
+        expect(attr(tags(wordParagraph(xml.document, "Colored"), "color")[0], "val")).toBe("214F61");
+        expect(buildLabsPrintHtml(input)).toContain("color:#214F61");
+    });
+
     it("packs A4, named semantic styles, exact units, local fonts, running header and page footer", async () => {
         const xml = await unpack(fixture());
         expect(xml.document.querySelector("parsererror")).toBeNull();

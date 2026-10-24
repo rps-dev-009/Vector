@@ -51,6 +51,7 @@ function statusLabel(run, isRunning) {
   if (run.reviewFeedback) return run.reviewFeedback;
   if (run.status === "aborted") return total > 0 ? `Stopped after ${plural(total, "change")}` : "Stopped";
   if (run.status === "error") return total > 0 ? `Failed after ${plural(total, "change")}` : "Failed";
+  if (run.done?.failedOperations?.length) return "Requested changes not finished";
   if (run.done?.truncated) {
     return total > 0
       ? `Paused after ${plural(total, "change")} — more work left`
@@ -83,7 +84,7 @@ function RunStatus({ run, isRunning }) {
           <Loader2 size={12} className="shrink-0 animate-spin text-primary" />
         ) : run.status === "error" ? (
           <AlertTriangle size={12} className="shrink-0 text-destructive" />
-        ) : done?.truncated ? (
+        ) : done?.truncated || done?.failedOperations?.length ? (
           <PauseCircle size={12} className="shrink-0 text-amber-400" />
         ) : (
           <Check size={12} className="shrink-0 text-emerald-500" />
@@ -132,6 +133,7 @@ function RunStatus({ run, isRunning }) {
                 <span>{plural(done.editCount || 0, "edit")}</span>
                 <span className="text-border">·</span>
                 <span>{done.toolCalls || 0} tool calls</span>
+                {Number.isFinite(done.wordCount) && <span>{done.wordCount.toLocaleString()} document words</span>}
                 {done.usage && (
                   <>
                     <span className="text-border">·</span>
@@ -187,13 +189,13 @@ function ErrorCard({ error, onRetry }) {
       <div className="flex items-center gap-2">
         <AlertTriangle size={13} className="shrink-0" />
         <span className="min-w-0 flex-1">
-          {isRate
-            ? `The AI is busy right now.${countdown ? ` Try again in ${countdown}s.` : " Try again in a few seconds."}`
-            : error.code === "auth"
-            ? "AI is not configured — set GEMINI_API_KEY on the server."
-            : error.message}
+          {error.message || (isRate ? "Too many requests. Please try again shortly."
+            : error.code === "quota" ? "The AI quota has been exhausted."
+            : error.code === "auth" ? "AI authentication failed. Please check the server configuration."
+            : "Something went wrong. Please try again.")}
+          {isRate && countdown ? ` Try again in ${countdown}s.` : ""}
         </span>
-        {(error.recoverable || isRate) && (
+        {error.code !== "quota" && (error.recoverable || isRate) && (
           <button
             type="button"
             onClick={onRetry}
@@ -241,7 +243,8 @@ export default function AssistantPane({
   const isRunning = run.status === "active";
   const canSend = !isRunning && !imagesPreparing && (instruction.trim() || attachments.length > 0);
   const reviewCount = run.review?.length || 0;
-  const showStatus = isRunning || (run.steps?.length || 0) > 0 || run.status === "error" || !!run.reviewFeedback;
+  const failedOperations = run.done?.failedOperations || [];
+  const showStatus = isRunning || (run.steps?.length || 0) > 0 || run.status === "error" || !!run.reviewFeedback || failedOperations.length > 0;
 
   /* Auto-scroll ONLY when the user is already near the bottom. */
   const handleScroll = useCallback(() => {
@@ -362,20 +365,42 @@ export default function AssistantPane({
         {/* ONE status line for the whole run */}
         {showStatus && <RunStatus run={run} isRunning={isRunning} />}
 
-        {/* The agent ran out of step budget mid-task: offer to finish it. */}
-        {!isRunning && run.done?.truncated && (
+        {/* Incomplete operations do not invalidate edits already available for review. */}
+        {!isRunning && (run.done?.truncated || failedOperations.length > 0) && (
           <div className="rounded-xl border border-amber-400/25 bg-amber-400/10 px-2.5 py-2 text-[11px] text-amber-300">
+            <p className="font-medium">The requested changes are not finished.</p>
             <p className="leading-relaxed">
-              The assistant used all {run.done.maxSteps || "its"} steps before finishing, so part of
-              the work is still missing.
+              {({
+                output_limit: "The AI reached its output limit before finishing.",
+                edit_limit: "The assistant reached the edit limit before finishing.",
+                document_limit: "This document reached its size limit. Put the remaining material in a separate document.",
+                length_target: "The draft is outside the requested word range and needs more work.",
+                tool_error: "Some requested edits could not be applied.",
+                provider_error: "The AI connection stopped before the work was finished."
+              })[run.done.stopReason] || (run.done.truncated ? `The assistant used all ${run.done.maxSteps || "its"} steps before finishing.` : null)}
             </p>
-            <button
+            {failedOperations.length > 0 && <ul aria-label="Failed operations" className="mt-2 space-y-2">
+              {failedOperations.map((failure, index) => <li key={index} className="min-w-0 whitespace-pre-wrap break-words">
+                <div className="font-medium">
+                  <code>{failure.tool}</code>
+                  {failure.blockId && <> on <code>{failure.blockId}</code></>}
+                  {failure.code && <> (<code>{failure.code}</code>)</>}
+                </div>
+                <p>{failure.message}</p>
+              </li>)}
+            </ul>}
+            {run.done.targetWords && Number.isFinite(run.done.wordCount) && <p className="mt-1 leading-relaxed">
+              {run.done.wordCount.toLocaleString()} document words
+              {run.done.targetWords && `; target ${run.done.targetWords.min.toLocaleString()}${run.done.targetWords.max == null ? "+" : `-${run.done.targetWords.max.toLocaleString()}`} words`}
+              {run.done.targetWords?.source === "pages" && " (page-based estimate)"}.
+            </p>}
+            {run.done.stopReason !== "document_limit" && <button
               type="button"
               onClick={onContinue}
               className="mt-1.5 flex items-center gap-1.5 rounded-lg bg-amber-400/15 px-2 py-1 font-medium text-amber-200 transition-colors hover:bg-amber-400/25"
             >
               <PlayCircle size={12} /> Continue the work
-            </button>
+            </button>}
           </div>
         )}
 

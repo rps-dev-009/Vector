@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 import {
   Bold, Italic, Underline, Strikethrough, Code2, Link2, Unlink,
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
-  List, ListOrdered, ListTodo, Quote, Minus, Heading1, Heading2, Heading3,
+  List, ListOrdered, ListTodo, Quote, Minus, Heading1, Heading2, Heading3, Heading4, Heading5, Heading6,
   Pilcrow, Table as TableIcon, Rows3, Columns3,
   Undo2, Redo2, Trash2, ChevronDown, Baseline, Highlighter, X
 } from "lucide-react";
@@ -99,6 +99,39 @@ export default function Toolbar({ editor, aiActive }) {
   const [menu, setMenu] = useState(null);
   const [linkUrl, setLinkUrl] = useState("");
 
+  useEffect(() => {
+    if (!editor || aiActive) {
+      setMenu(null);
+      return;
+    }
+    let dom;
+    const handleLinkShortcut = event => {
+      if (!editor.isEditable || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      setLinkUrl(editor.getAttributes("link").href || "");
+      setMenu("link");
+    };
+    const detach = () => {
+      dom?.removeEventListener("keydown", handleLinkShortcut);
+      dom = null;
+    };
+    const attach = () => {
+      detach();
+      if (editor.isDestroyed) return;
+      dom = editor.view.dom;
+      dom.addEventListener("keydown", handleLinkShortcut);
+    };
+    // React can mount the toolbar before EditorContent creates its view.
+    editor.on("mount", attach);
+    editor.on("unmount", detach);
+    attach();
+    return () => {
+      detach();
+      editor.off("mount", attach);
+      editor.off("unmount", detach);
+    };
+  }, [editor, aiActive]);
+
   const state = useEditorState({
     editor,
     selector: ({ editor }) => {
@@ -108,6 +141,9 @@ export default function Toolbar({ editor, aiActive }) {
       if (editor.isActive("heading", { level: 1 })) label = "Heading 1";
       else if (editor.isActive("heading", { level: 2 })) label = "Heading 2";
       else if (editor.isActive("heading", { level: 3 })) label = "Heading 3";
+      else if (editor.isActive("heading", { level: 4 })) label = "Heading 4";
+      else if (editor.isActive("heading", { level: 5 })) label = "Heading 5";
+      else if (editor.isActive("heading", { level: 6 })) label = "Heading 6";
       else if (editor.isActive("bulletList")) label = "Bullet list";
       else if (editor.isActive("orderedList")) label = "Numbered list";
       else if (editor.isActive("taskList")) label = "Task list";
@@ -145,9 +181,12 @@ export default function Toolbar({ editor, aiActive }) {
 
   const blockTypes = [
     { label: "Paragraph", icon: Pilcrow, action: () => chain().setParagraph().run() },
-    { label: "Heading 1", icon: Heading1, action: () => chain().toggleHeading({ level: 1 }).run() },
-    { label: "Heading 2", icon: Heading2, action: () => chain().toggleHeading({ level: 2 }).run() },
-    { label: "Heading 3", icon: Heading3, action: () => chain().toggleHeading({ level: 3 }).run() },
+    { label: "Heading 1", icon: Heading1, action: () => chain().setHeading({ level: 1 }).run() },
+    { label: "Heading 2", icon: Heading2, action: () => chain().setHeading({ level: 2 }).run() },
+    { label: "Heading 3", icon: Heading3, action: () => chain().setHeading({ level: 3 }).run() },
+    { label: "Heading 4", icon: Heading4, action: () => chain().setHeading({ level: 4 }).run() },
+    { label: "Heading 5", icon: Heading5, action: () => chain().setHeading({ level: 5 }).run() },
+    { label: "Heading 6", icon: Heading6, action: () => chain().setHeading({ level: 6 }).run() },
     { label: "Bullet list", icon: List, action: () => chain().toggleBulletList().run() },
     { label: "Numbered list", icon: ListOrdered, action: () => chain().toggleOrderedList().run() },
     { label: "Task list", icon: ListTodo, action: () => chain().toggleTaskList().run() },

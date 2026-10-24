@@ -57,7 +57,8 @@ export const BLOCK_TYPES = [
   "blockquote",
   "codeBlock",
   "table",
-  "horizontalRule"
+  "horizontalRule",
+  "spacer"
 ];
 
 // Top-level Tiptap node types that carry a blockId (mirrors BLOCK_TYPES).
@@ -70,7 +71,8 @@ export const BLOCK_NODE_TYPES = [
   "blockquote",
   "codeBlock",
   "table",
-  "horizontalRule"
+  "horizontalRule",
+  "spacer"
 ];
 
 /**

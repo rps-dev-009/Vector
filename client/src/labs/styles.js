@@ -6,7 +6,13 @@ export const BLOCK_STYLE_KEYS = [
   "fontFamily", "fontSizePt", "lineHeight", "spaceBeforePt", "spaceAfterPt",
   "tableVariant", "tableCellPaddingPt", ...spec.tableColorAttrs
 ];
-export const SERVER_ATTR_KEYS = ["textColor", "backgroundColor", "align", "level", "language", ...BLOCK_STYLE_KEYS];
+export const SERVER_ATTR_KEYS = ["textColor", "backgroundColor", "align", "level", "language", "heightPt", ...BLOCK_STYLE_KEYS];
+
+export function resolveSpacerHeight(heightPt) {
+  const { defaultHeightPt, minHeightPt, maxHeightPt } = spec.spacer;
+  return typeof heightPt === "number" && Number.isFinite(heightPt)
+    ? Math.min(maxHeightPt, Math.max(minHeightPt, heightPt)) : defaultHeightPt;
+}
 
 const namedColors = {
   black: "#111827", white: "#FFFFFF", gray: "#6B7280", grey: "#6B7280",
@@ -21,8 +27,14 @@ const namedBackgrounds = {
 
 export function resolveColor(value, background = false) {
   if (typeof value !== "string") return null;
+  value = value.trim();
   if (/^#[\da-f]{6}$/i.test(value)) return value.toUpperCase();
   if (/^#[\da-f]{3}$/i.test(value)) return "#" + [...value.slice(1)].map(c => c + c).join("").toUpperCase();
+  // CSSOM serializes pasted hex colors as rgb(...). Keep them on round-trip.
+  const rgb = value.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(1(?:\.0+)?))?\s*\)$/i);
+  if (rgb && rgb.slice(1, 4).every(channel => Number(channel) <= 255)) {
+    return "#" + rgb.slice(1, 4).map(channel => Number(channel).toString(16).padStart(2, "0")).join("").toUpperCase();
+  }
   return (background ? namedBackgrounds : namedColors)[value.toLowerCase()] || null;
 }
 
@@ -54,8 +66,8 @@ export function resolveBlockStyle(type, attrs = {}, documentStyle = {}) {
   const result = {
     fontFamily: heading ? theme.headingFont : theme.bodyFont,
     fontSizePt, lineHeight: heading ? 1.22 : theme.lineHeight,
-    spaceBeforePt: heading ? (level === 1 ? 0 : 22) : 0,
-    spaceAfterPt: heading ? 9 : theme.spaceAfterPt,
+    spaceBeforePt: heading ? (level === 1 ? 0 : level === 2 ? 18 : 12) : 0,
+    spaceAfterPt: heading ? (level === 1 ? 12 : 6) : theme.spaceAfterPt,
     textColor: heading ? theme.accent : theme.ink,
     backgroundColor: type === "blockquote" ? theme.soft : null, align: "left",
     tableHeaderBackground: theme.tableHeaderBackground,

@@ -4,7 +4,7 @@ import { buildLabsExtensions } from "./extensions/buildExtensions.js";
 import { blockToNodeJSON, editorToBlocks } from "./bridge/markdown.js";
 import { applyEditEvents, createApplyContext, restoreBlock } from "./applyEdit.js";
 import { createReviewStore } from "./reviewStore.js";
-import { STYLE_SPEC, DOCUMENT_STYLE_ID, resolveBlockStyle, resolveDocumentStyle, documentCssVariables } from "./styles.js";
+import { STYLE_SPEC, DOCUMENT_STYLE_ID, resolveColor, resolveBlockStyle, resolveDocumentStyle, documentCssVariables } from "./styles.js";
 
 let editor;
 afterEach(() => { editor?.destroy(); editor = null; });
@@ -63,6 +63,67 @@ describe("document styling contract", () => {
     create([{ id: "p", type: "paragraph", text: "Original", attrs: { fontFamily: "Georgia", fontSizePt: 15, spaceAfterPt: 0 } }]);
     applyEditEvents(editor, [{ op: "replace", blockId: "p", after: "Updated" }], createApplyContext());
     expect(editorToBlocks(editor.getJSON())[0].attrs).toEqual({ fontFamily: "Georgia", fontSizePt: 15, spaceAfterPt: 0 });
+  });
+
+  it("clears omitted overrides in a complete replacement attrs map", () => {
+    create([{ id: "p", type: "paragraph", text: "Body", attrs: { fontSizePt: 19, textColor: "blue" } }]);
+    applyEditEvents(editor, [{ op: "replace", blockId: "p", after: "Body", attrs: { textColor: "blue" } }], createApplyContext());
+    expect(editorToBlocks(editor.getJSON())[0].attrs).toEqual({ textColor: "blue" });
+  });
+
+  it("repairs a prose heading without losing words or marks, and can reject the conversion", () => {
+    const text = "Pruning regulates **growth** and fruit quality. ".repeat(25).trim();
+    create([{ id: "bad-h", type: "heading", text, attrs: { level: 2, fontSizePt: 19, textColor: "blue" } }]);
+    const before = editor.getJSON().content[0];
+    const store = createReviewStore(); store.startRun(editor);
+    const event = { op: "replace", blockId: "bad-h", type: "paragraph", before: text, after: text, attrs: {} };
+    const ctx = createApplyContext();
+    applyEditEvents(editor, [event], ctx, { onBeforeEdit: (e, info) => store.captureBeforeEdit(e, info) });
+    expect(ctx.skipped).toEqual([]);
+    expect(editorToBlocks(editor.getJSON())[0]).toMatchObject({ id: "bad-h", type: "paragraph", text, attrs: {} });
+    expect(editor.getJSON().content[0].content).toEqual(before.content);
+    restoreBlock(editor, store.pendingEntries()[0]);
+    expect(editor.getJSON().content[0]).toEqual(before);
+  });
+
+  it("keeps shorter gaps below headings than above and preserves explicit spacing", () => {
+    const section = resolveBlockStyle("heading", { level: 2 });
+    const subsection = resolveBlockStyle("heading", { level: 3 });
+    expect(section.spaceBeforePt).toBe(18);
+    expect(subsection.spaceBeforePt).toBe(12);
+    expect(section.spaceAfterPt).toBe(6);
+    expect(resolveBlockStyle("heading", { level: 2, spaceAfterPt: 0 }).spaceAfterPt).toBe(0);
+  });
+
+  it("normalizes opaque CSSOM colors without accepting translucent or unsafe values", () => {
+    expect(resolveColor("rgb(33, 79, 97)")).toBe("#214F61");
+    expect(resolveColor("rgba(33, 79, 97, 1)")).toBe("#214F61");
+    expect(resolveColor("rgba(33, 79, 97, 0.5)")).toBeNull();
+    expect(resolveColor("rgb(999, 79, 97)")).toBeNull();
+    expect(resolveColor("rgb(33,79,97);background:red")).toBeNull();
+  });
+
+  it("packs pasted block colors as server-safe hex, not CSSOM rgb strings", () => {
+    create();
+    editor.commands.setContent('<p style="color:#214f61;background-color:#eef5f6">Pasted text</p>');
+    expect(editorToBlocks(editor.getJSON())[0].attrs).toMatchObject({ textColor: "#214F61", backgroundColor: "#EEF5F6" });
+  });
+
+  it("converts mixed multi-block selections to body text without leaking heading styles", () => {
+    create([
+      { id: "h", type: "heading", text: "Heading", attrs: { level: 2, fontSizePt: 30, textColor: "blue" } },
+      { id: "body", type: "paragraph", text: "Body", attrs: { fontSizePt: 12, textColor: "green" } },
+      { id: "h2", type: "heading", text: "Second", attrs: { level: 2, fontSizePt: 19 } },
+      { id: "tail", type: "paragraph", text: "Tail", attrs: {} }
+    ]);
+    editor.commands.setTextSelection({ from: 1, to: editor.state.doc.content.size - 1 });
+    expect(editor.commands.setParagraph()).toBe(true);
+    const blocks = editorToBlocks(editor.getJSON());
+    expect(blocks.map(block => block.id)).toEqual(["h", "body", "h2", "tail"]);
+    expect(blocks.every(block => block.type === "paragraph")).toBe(true);
+    expect(blocks[0].attrs).toEqual({});
+    expect(blocks[1].attrs).toEqual({ fontSizePt: 12, textColor: "green" });
+    expect(blocks[2].attrs).toEqual({});
   });
 
   it("keeps first document-style before-state and reverts without touching content", () => {

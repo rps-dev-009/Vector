@@ -85,7 +85,7 @@
   font-weight: 700;
   line-height: 1.22;
   letter-spacing: -0.022em;
-  margin: 0 0 9pt;
+  margin: 0 0 12pt;
 }
 
 .labs-prose .ProseMirror h2 {
@@ -95,7 +95,7 @@
   font-weight: 650;
   line-height: 1.22;
   letter-spacing: -0.014em;
-  margin: 22pt 0 9pt;
+  margin: 18pt 0 6pt;
 }
 
 .labs-prose .ProseMirror h3 {
@@ -105,7 +105,7 @@
   font-weight: 620;
   line-height: 1.22;
   letter-spacing: -0.008em;
-  margin: 22pt 0 9pt;
+  margin: 12pt 0 6pt;
 }
 
 .labs-prose .ProseMirror h4,
@@ -115,7 +115,7 @@
   font-size: var(--doc-subheading-size);
   font-weight: 620;
   line-height: 1.22;
-  margin: 22pt 0 9pt;
+  margin: 12pt 0 6pt;
   color: var(--doc-accent);
 }
 
@@ -431,6 +431,33 @@
 
 .light .labs-prose .ProseMirror .labs-review-modified {
   --labs-review-tint: hsl(38 90% 48% / 0.16);
+}
+
+/* A spacer is document geometry, never placeholder text or a horizontal rule. */
+.labs-prose .ProseMirror [data-type="labs-spacer"] {
+  display: block;
+  width: 100%;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+  cursor: default;
+}
+
+.labs-prose .ProseMirror [data-type="labs-spacer"]::before,
+.labs-prose .ProseMirror [data-type="labs-spacer"]::after {
+  content: none;
+}
+
+@media screen {
+  .labs-prose .ProseMirror[contenteditable="true"] [data-type="labs-spacer"]:hover {
+    outline: 1px dashed var(--doc-muted);
+    outline-offset: -1px;
+  }
+
+  .labs-prose .ProseMirror[contenteditable="true"] [data-type="labs-spacer"].ProseMirror-selectednode {
+    outline: 2px solid var(--doc-accent);
+    outline-offset: -2px;
+  }
 }
 
 /* Floating Keep/Reject attached to the hovered block */

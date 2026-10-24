@@ -6,6 +6,7 @@ const { createParser } = require("eventsource-parser");
 const { loadModelsFromEnv, loadModelsFromEnvDetailed, loadPublicModels } = require("./models");
 const { loadGoogleModels, resolveGoogleModel, publicGoogleModel } = require("./googleModels");
 const { validateChatHistory, buildGoogleChatMessages, streamGoogleChat, googleChatError } = require("./googleChat");
+const { googleErrorPayload } = require("./googleErrors");
 const { registerLabsAgentRoute } = require("./labs/route");
 const { labsJsonParser } = require("./labs/images");
 
@@ -675,7 +676,7 @@ app.post("/chat", async (req, res) => {
     const isAbortError = error?.name === "AbortError";
     console.error(
       `[Chat] Streaming failed (ClientAborted: ${clientAborted}, AbortError: ${isAbortError}):`,
-      googleModel ? googleChatError(error) : error?.message
+      googleModel ? googleChatError(error, googleModel.modelId) : error?.message
     );
 
     if (clientAborted || (googleModel && isAbortError)) {
@@ -685,7 +686,7 @@ app.post("/chat", async (req, res) => {
     }
 
     if (googleModel) {
-      sendEvent(res, "error", { message: googleChatError(error) });
+      sendEvent(res, "error", googleErrorPayload(error, googleModel.modelId));
       sendEvent(res, "done", { ok: false });
       return;
     }

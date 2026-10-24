@@ -17,7 +17,8 @@ import {
   applyEditEvent,
   createApplyContext,
   restoreBlock,
-  findBlockByPos
+  findBlockByPos,
+  blockPlainText
 } from "./applyEdit.js";
 import { createReviewStore } from "./reviewStore.js";
 
@@ -112,6 +113,41 @@ describe("applyEditEvents", () => {
     expect(ctx.usage.fallbackPath).toBe(1);
     expect(ctx.usage.rangePath).toBe(0);
     expect(currentBlock("b02").text).toBe("totally new");
+  });
+
+  it("preserves unchanged interior text and marks between disjoint, unequal-length edits", () => {
+    editor = makeEditor([{ id: "p1", type: "paragraph", text: "alpha **middle** omega", attrs: {} }]);
+    // Inline highlighting is local-only and is not present in server markdown.
+    editor.view.dispatch(editor.state.tr.addMark(7, 13, editor.schema.marks.highlight.create({ color: "#ffff00" })));
+    const middle = findBlockByPos(editor.state.doc, "p1").node.child(1).toJSON();
+    const ctx = createApplyContext();
+    applyEditEvent(editor, {
+      op: "replace_in_block", blockId: "p1",
+      before: "alpha **middle** omega", after: "ALPHABET **middle** END"
+    }, ctx);
+    const node = findBlockByPos(editor.state.doc, "p1").node;
+    expect(blockPlainText(node)).toBe("ALPHABET middle END");
+    expect(node.child(1).toJSON()).toEqual(middle);
+    expect(ctx.usage.rangePath).toBe(1);
+    expect(ctx.usage.fallbackPath).toBe(0);
+  });
+
+  it.each([
+    ["alpha middle omega", "middle"],
+    ["middle", "alpha middle omega"],
+    ["alpha  middle omega", "ALPHA middle   END"],
+    ["alpha\n**middle**\nomega", "ALPHABET\n**middle**\nEND"],
+    ["alpha middle omega", "alpha\nmiddle\nomega"],
+    ["", "new text"],
+    ["old text", ""]
+  ])("applies exact range text including whitespace and hard breaks: %j -> %j", (before, after) => {
+    editor = makeEditor([{ id: "p1", type: "paragraph", text: before, attrs: {} }]);
+    const ctx = createApplyContext();
+    applyEditEvent(editor, { op: "replace_in_block", blockId: "p1", before, after }, ctx);
+    const expected = editor.schema.nodeFromJSON(blockToNodeJSON({ id: "p1", type: "paragraph", text: after, attrs: {} }));
+    expect(findBlockByPos(editor.state.doc, "p1").node.content.toJSON()).toEqual(expected.content.toJSON());
+    expect(ctx.usage.rangePath).toBe(1);
+    expect(ctx.usage.fallbackPath).toBe(0);
   });
 
   it("uses the FALLBACK path for non text-container blocks (lists)", () => {

@@ -1,4 +1,6 @@
 const { googleProviderOptions } = require("./googleModels");
+const { googleFailure, googleErrorPayload } = require("./googleErrors");
+const { createGoogleFetch } = require("./googleTransport");
 
 function validateChatHistory(messages) {
   if (messages === undefined) return { messages: [], error: null };
@@ -52,43 +54,57 @@ function loadSdk() {
   return sdkPromise;
 }
 
-function googleChatError(error) {
-  const status = error?.statusCode || error?.cause?.statusCode;
-  if (status === 401 || status === 403) return "Google authentication failed. Check the server API key and model access.";
-  if (status === 429) return "Google rate limit reached. Please try again later.";
-  if (status === 404) return "The configured Google model is unavailable for this API key.";
-  if (status === 400) return "Google rejected this request. Check the model, thinking level, and attachments.";
-  return "Google could not complete the response. Please try again.";
+function googleChatError(error, modelId) {
+  return googleErrorPayload(error, modelId).message;
 }
 
 async function streamGoogleChat({ model, apiKey, messages, signal, sendEvent }, sdk) {
   signal?.throwIfAborted();
   const { streamText, createGoogle } = sdk || await loadSdk();
   signal?.throwIfAborted();
-  const google = createGoogle({ apiKey });
-  const result = streamText({
-    model: google(model.modelId),
-    messages,
-    providerOptions: googleProviderOptions(model),
-    abortSignal: signal,
-    maxRetries: 0,
-    onError() {} // The error stream part is handled below without exposing provider details.
-  });
+  const google = createGoogle({ apiKey, fetch: createGoogleFetch({ modelId: model.modelId, signal,
+    onRetry: seconds => sendEvent("activity", { state: "retrying", retryAfterSeconds: seconds }) }) });
   let sawText = false;
-  for await (const part of result.stream) {
-    signal?.throwIfAborted();
-    if (part.type === "error") throw part.error || new Error("Google stream failed");
-    if (part.type === "abort") throw new DOMException("Request cancelled", "AbortError");
-    if (part.type === "text-delta" && part.text) {
-      sawText = true;
-      sendEvent("token", { text: part.text });
-    }
-    if (part.type === "finish" && ["error", "content-filter"].includes(part.finishReason)) {
-      throw new Error("Google did not complete the response");
+  let sawReasoning = false;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = streamText({
+        model: google(model.modelId),
+        messages,
+        providerOptions: googleProviderOptions(model),
+        abortSignal: signal,
+        maxRetries: 0,
+        timeout: { totalMs: 150000, firstChunkMs: 120000, chunkMs: 120000 },
+        onError() {} // Consume safe errors below instead of logging provider details.
+      });
+      for await (const part of result.stream) {
+        signal?.throwIfAborted();
+        if (part.type === "error") throw part.error || new Error("Google stream failed");
+        if (part.type === "abort") {
+          if (signal?.aborted) signal.throwIfAborted();
+          throw new DOMException("Google response timed out", "TimeoutError");
+        }
+        if (part.type === "reasoning-delta" && !sawReasoning) {
+          sawReasoning = true;
+          sendEvent("activity", { state: "reasoning" });
+        }
+        if (part.type === "text-delta" && part.text) {
+          sawText = true;
+          sendEvent("token", { text: part.text });
+        }
+        if (part.type === "finish" && ["error", "content-filter"].includes(part.finishReason)) {
+          throw new Error("Google did not complete the response");
+        }
+      }
+      signal?.throwIfAborted();
+      if (!sawText) throw new Error("Google returned an empty response");
+      return;
+    } catch (error) {
+      if (signal?.aborted || sawText || attempt > 0 || !googleFailure(error, model.modelId).retryable) throw error;
+      // Retry only transient provider failures before any answer was emitted.
+      sendEvent("activity", { state: "retrying" });
     }
   }
-  signal?.throwIfAborted();
-  if (!sawText) throw new Error("Google returned an empty response");
 }
 
 module.exports = { validateChatHistory, buildGoogleChatMessages, streamGoogleChat, googleChatError };

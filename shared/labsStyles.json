@@ -1,6 +1,7 @@
 {
   "defaultPreset": "editorial",
   "documentStyleId": "__labs_document_style__",
+  "spacer": { "defaultHeightPt": 144, "minHeightPt": 24, "maxHeightPt": 360 },
   "fonts": ["Inter", "Arial", "Georgia", "Cambria", "Calibri", "Verdana", "Times New Roman"],
   "numberAttrs": {
     "fontSizePt": [8, 48],

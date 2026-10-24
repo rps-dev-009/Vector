@@ -66,7 +66,8 @@ export function useLabsProjects() {
   // Project is locked when it has content
   const isProjectLocked = useMemo(() => {
     if (!activeProject) return false;
-    return (activeProject.document?.trim().length ?? 0) > 0;
+    return (activeProject.document?.trim().length ?? 0) > 0 ||
+      Boolean(activeProject.content?.content?.some(node => node.type === "spacer"));
   }, [activeProject]);
 
   const [labsModels, setLabsModels] = useState([]);

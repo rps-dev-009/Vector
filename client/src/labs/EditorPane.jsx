@@ -158,7 +158,7 @@ export default function EditorPane({
       <div ref={scrollRef} className="labs-canvas labs-scroll custom-scrollbar min-h-0 flex-1 overflow-y-auto">
         <div ref={pageRef} className="labs-page labs-prose" data-document-theme={theme.preset}
           data-table-variant={theme.tableVariant} style={documentCssVariables(documentStyle)}>
-          <div className="labs-paper-label" contentEditable={false}><span>{theme.name}</span><span>VECTOR / LABS</span></div>
+          <div className="labs-paper-label" contentEditable={false}><span>{theme.name}</span><span title="Continuous editing canvas. Use Print / Save PDF to preview page breaks.">Continuous document</span></div>
           <EditorContent editor={editor} />
           <BlockReviewActions
             disabled={aiActive}

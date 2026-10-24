@@ -17,7 +17,7 @@
  */
 
 import { parseInlineMarkdown, serializeInlineNodes } from "./inlineMarkdown.js";
-import { BLOCK_STYLE_KEYS } from "../styles.js";
+import { BLOCK_STYLE_KEYS, resolveSpacerHeight } from "../styles.js";
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 
@@ -167,6 +167,9 @@ function parseTableContent(text) {
  */
 export function blockToNodeJSON(block) {
   const { id, type, text, attrs = {} } = block;
+  if (type === "spacer") {
+    return { type, attrs: { blockId: id, heightPt: resolveSpacerHeight(attrs.heightPt) } };
+  }
   const base = { blockId: id };
   if (attrs.textColor) base.textColor = attrs.textColor;
   if (attrs.backgroundColor) base.backgroundColor = attrs.backgroundColor;
@@ -271,6 +274,9 @@ export function nodeToBlock(nodeOrJSON) {
   const node = typeof nodeOrJSON?.toJSON === "function" ? nodeOrJSON.toJSON() : nodeOrJSON;
   if (!node) return null;
   const blockId = node.attrs?.blockId ?? null;
+  if (node.type === "spacer") {
+    return { id: blockId, type: "spacer", text: "", attrs: { heightPt: resolveSpacerHeight(node.attrs?.heightPt) } };
+  }
   const attrs = {};
   if (node.attrs?.level != null) attrs.level = node.attrs.level;
   if (node.attrs?.language) attrs.language = node.attrs.language;
@@ -322,6 +328,7 @@ export function blocksToMarkdownDocument(blocks) {
   const parts = [];
   for (const block of blocks) {
     const { type, text, attrs = {} } = block;
+    if (type === "spacer") continue; // Plain Markdown cannot retain measured blank space.
     if (type === "heading") {
       parts.push("#".repeat(Math.min(6, Math.max(1, attrs.level || 1))) + " " + text);
     } else if (type === "blockquote") {

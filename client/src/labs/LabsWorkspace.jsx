@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditor } from "@tiptap/react";
 import { closeHistory } from "@tiptap/pm/history";
+import { NodeSelection } from "@tiptap/pm/state";
 import { AlertTriangle, PanelLeftClose, Sparkles, X } from "lucide-react";
 import { cn } from "../utils/cn.js";
 import { buildLabsExtensions } from "./extensions/buildExtensions.js";
@@ -83,13 +84,18 @@ function changedBlockIds(tr) {
   return ids;
 }
 
-/** Start a new undo group so a run is one Ctrl+Z unit. */
+/** Separate AI edits from manual editing; streamed batches may span undo groups. */
 function closeHistoryGroup(editor) {
   editor.view.dispatch(closeHistory(editor.state.tr).setMeta("addToHistory", false));
 }
 
 function captureSelection(editor) {
-  const { from, to, empty } = editor.state.selection;
+  const selected = editor.state.selection;
+  if (selected instanceof NodeSelection && selected.node.type.name === "spacer") {
+    const id = selected.node.attrs.blockId;
+    return id ? { blockIds: [id], text: "", label: "Blank space" } : null;
+  }
+  const { from, to, empty } = selected;
   if (empty || to - from < 3) return null;
   const text = editor.state.doc.textBetween(from, to, "\n");
   const blockIds = [];
@@ -129,6 +135,8 @@ export default function LabsWorkspace({
   const imageDraft = useLabsImages();
   const [imageCache, setImageCache] = useState(() => new Map());
   const lastRequestRef = useRef(null);
+  // Continue retains the original task, independently of attachment recovery.
+  const taskRef = useRef(null);
   const [assistantWidth, setAssistantWidth] = useState(() => {
     const saved = Number(localStorage.getItem(WIDTH_KEY));
     return saved ? clamp(saved, ASSISTANT_MIN, ASSISTANT_MAX) : ASSISTANT_DEFAULT;
@@ -255,6 +263,7 @@ export default function LabsWorkspace({
   /* ── Agent run ── */
   const finalizeRun = () => {
     if (editor && !editor.isDestroyed) {
+      closeHistoryGroup(editor);
       editor.setEditable(true);
       refreshReview(editor);
     }
@@ -345,12 +354,20 @@ export default function LabsWorkspace({
   });
 
   const send = useCallback(
-    (text, selectionOverride, attachedImages = []) => {
+    (text, selectionOverride, attachedImages = [], continuation) => {
       if (!editor || editor.isDestroyed || agent.isRunning || imageDraft.preparing || (!text.trim() && !attachedImages.length)) return;
-      const requestText = text.trim() || IMAGE_ONLY_INSTRUCTION;
+      const requestText = text.trim() ? text : IMAGE_ONLY_INSTRUCTION;
       const history = imageHistory(activeProject.chat || [], imageCache, attachedImages);
       lastRequestRef.current = { text, images: attachedImages };
-      const sel = selectionOverride || captureSelection(editor);
+      const sel = selectionOverride === undefined ? captureSelection(editor) : selectionOverride;
+      const requestSelection = sel ? { blockIds: [...sel.blockIds], text: sel.text } : null;
+      if (continuation === undefined) {
+        // Pin the original image context even after its chat messages age out.
+        taskRef.current = { instruction: requestText, selection: requestSelection, images: [
+          ...attachedImages,
+          ...history.flatMap(message => message.images || []).map(image => imageCache.get(image.id))
+        ] };
+      }
       applyCtxRef.current = createApplyContext();
       ensureBlockIds(editor);
       reviewStoreRef.current.startRun(editor);
@@ -380,7 +397,8 @@ export default function LabsWorkspace({
         instruction: requestText,
         images: attachedImages.map(imageForRequest),
         messages: history,
-        selection: sel ? { blockIds: sel.blockIds, text: sel.text } : null
+        selection: requestSelection,
+        ...(continuation === undefined ? {} : { continuation })
       }));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -542,11 +560,14 @@ export default function LabsWorkspace({
       onRejectAll={rejectAll}
       onJumpToFirstChange={jumpToFirstChange}
       onDismissError={() => updateRun((r) => { r.status = "idle"; r.error = null; })}
-      onContinue={() =>
-        send(
-          "Continue exactly where you stopped and finish the work you had started. Do not redo or rewrite what is already there."
-        )
-      }
+      onContinue={() => {
+        const task = taskRef.current;
+        if (!task) return;
+        send(task.instruction, task.selection, task.images, {
+          targetWords: run.done?.targetWords ?? null,
+          failedOperations: run.done?.failedOperations ?? []
+        });
+      }}
     />
   );
 

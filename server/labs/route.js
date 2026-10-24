@@ -5,6 +5,7 @@
  *   { projectId, blocks: [{id,type,text,attrs}], instruction,
  *     images?: [{id?, name, mediaType, data}],
  *     messages: [{role, content, images?}], selection: {blockIds, text} | null,
+ *     continuation?: {targetWords: {min,max,source}|null, failedOperations: [{tool,blockId?,message,code?}]},
  *     documentStyle?: {preset, fontFamily?, fontSizePt?, lineHeight?, spaceAfterPt?, marginMm?} }
  *
  * Validation failures return a clear JSON error (not a stream).
@@ -16,11 +17,32 @@ const { runLabsAgent, sendEvent } = require("./engine");
 const { validateIncomingBlocks, validateDocumentStyle } = require("./blocks");
 const { validateImages, IMAGE_SPEC } = require("./images");
 const { resolveGoogleModel } = require("../googleModels");
+const { z } = require("zod");
 
 const MAX_INSTRUCTION_CHARS = 10000;
 const MAX_MESSAGES = 10;
 const MAX_MESSAGE_CHARS = 100000;
 const MAX_PROJECT_ID_CHARS = 128;
+const continuationSchema = z.object({
+  targetWords: z.object({
+    min: z.number().int().min(0).max(200000),
+    max: z.number().int().min(1).max(200000).nullable(),
+    source: z.enum(["words", "pages", "default"])
+  }).strict().refine(target => target.max === null || target.max >= target.min).nullable().optional(),
+  failedOperations: z.array(z.object({
+    tool: z.string().min(1).max(40).regex(/^[a-z_]+$/),
+    blockId: z.string().min(1).max(128).optional(),
+    message: z.string().min(1).max(360),
+    code: z.string().min(1).max(40).optional()
+  }).strict()).max(8).optional()
+}).strict();
+
+function validateContinuation(value) {
+  if (value == null) return { ok: true, continuation: null };
+  const parsed = continuationSchema.safeParse(value);
+  return parsed.success ? { ok: true, continuation: { targetWords: null, failedOperations: [], ...parsed.data } }
+    : { ok: false, error: "continuation must contain a valid targetWords range and at most 8 failedOperations with messages up to 360 characters." };
+}
 
 function jsonError(res, status, message) {
   return res.status(status).json({ error: message });
@@ -77,7 +99,7 @@ function validateSelection(selection) {
 
 function registerLabsAgentRoute(app) {
   app.post("/labs/agent", async (req, res) => {
-    const { projectId, blocks, documentStyle, instruction, images, messages, selection, modelId, thinkingLevel } = req.body || {};
+    const { projectId, blocks, documentStyle, instruction, images, messages, selection, modelId, thinkingLevel, continuation } = req.body || {};
 
     // ── Validation (JSON errors, no stream) ──
     if (typeof projectId !== "string" || projectId.trim() === "" || projectId.length > MAX_PROJECT_ID_CHARS) {
@@ -98,6 +120,8 @@ function registerLabsAgentRoute(app) {
     if (!checkedMessages.ok) return jsonError(res, checkedMessages.tooLarge ? 413 : 400, checkedMessages.error);
     const checkedSelection = validateSelection(selection);
     if (!checkedSelection.ok) return jsonError(res, 400, checkedSelection.error);
+    const checkedContinuation = validateContinuation(continuation);
+    if (!checkedContinuation.ok) return jsonError(res, 400, checkedContinuation.error);
     const imageCount = checkedImages.images.length + checkedMessages.messages.reduce((count, m) => count + (m.images?.length || 0), 0);
     const hasImages = imageCount > 0;
 
@@ -145,6 +169,7 @@ function registerLabsAgentRoute(app) {
         images: checkedImages.images,
         history: checkedMessages.messages,
         selection: checkedSelection.selection,
+        continuation: checkedContinuation.continuation,
         projectId,
         model: selected.model,
         signal: controller.signal
@@ -177,4 +202,4 @@ function registerLabsAgentRoute(app) {
   });
 }
 
-module.exports = { registerLabsAgentRoute };
+module.exports = { registerLabsAgentRoute, validateContinuation };

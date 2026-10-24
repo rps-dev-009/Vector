@@ -9,6 +9,7 @@
  */
 
 import StarterKit from "@tiptap/starter-kit";
+import Document from "@tiptap/extension-document";
 import { TextStyle, Color, BackgroundColor } from "@tiptap/extension-text-style";
 import Highlight from "@tiptap/extension-highlight";
 import TextAlign from "@tiptap/extension-text-align";
@@ -20,10 +21,13 @@ import { BLOCK_NODE_TYPES } from "../constants/palette.js";
 import { LabsBlockId } from "./blockId.js";
 import { LabsBlockAttrs } from "./blockAttrs.js";
 import { LabsReviewDecorations } from "./reviewDecorations.js";
+import { LabsSpacer } from "./spacer.js";
 
 export function buildLabsExtensions() {
   return [
-    StarterKit,
+    StarterKit.configure({ document: false, link: { openOnClick: false } }),
+    Document.extend({ content: "(block | spacer)+" }),
+    LabsSpacer,
     // Inline character styling (user-applied; not representable in block
     // markdown — documented lossy case).
     TextStyle,
@@ -31,7 +35,7 @@ export function buildLabsExtensions() {
     BackgroundColor,
     Highlight.configure({ multicolor: true }),
     // Block-level alignment (server attr `align` maps to `textAlign`).
-    TextAlign.configure({ types: BLOCK_NODE_TYPES }),
+    TextAlign.configure({ types: BLOCK_NODE_TYPES.filter(type => type !== "spacer") }),
     TableKit.configure({ resizable: false }),
     TaskList,
     TaskItem.configure({ nested: true }),

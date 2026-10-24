@@ -151,7 +151,8 @@ export default function LabsArea({ toggleSidebar, sidebarOpen, onProjectLockChan
         }
     };
 
-    const canExport = Boolean((activeProject?.document || "").trim());
+    const canExport = Boolean((activeProject?.document || "").trim() ||
+        activeProject?.content?.content?.some(node => node.type === "spacer"));
 
     const runExport = async (kind, exportOptions = {}) => {
         if (!canExport) return;

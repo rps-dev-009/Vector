@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createParser } from "eventsource-parser";
 
 const MAX_MESSAGES = 20;
-const REQUEST_TIMEOUT_MS = 60000; // 60 second timeout
+const REQUEST_TIMEOUT_MS = 180000;
 const GLOBAL_HISTORY_KEY = "flowise_history_global";
 
 const MODES = [
@@ -110,10 +110,9 @@ export function useChatSession() {
   const [message, setMessage] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const abortRef = useRef(null);
-  const timeoutRef = useRef(null);
   const initialLoadDone = useRef(false);
-  const tokenBufferRef = useRef("");
-  const flushScheduledRef = useRef(false);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // Load sessions synchronously from localStorage on first render
   // to avoid race conditions with model loading
@@ -311,11 +310,12 @@ export function useChatSession() {
   }
 
   async function handleSend(files = []) {
-    if (!message.trim() || !activeSession || isStreaming) return;
+    if (!message.trim() || !activeSession || isStreaming || abortRef.current) return;
     if (message.trim().length > 10000) return;
 
     // Convert files to Flowise format
     const uploads = await filesToFlowise(files);
+    if (abortRef.current) return;
 
     const userMessage = {
       id: crypto.randomUUID(),
@@ -368,67 +368,92 @@ export function useChatSession() {
     setMessage("");
     setIsStreaming(true);
 
-    abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-
-    // Clear any existing timeout
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
-
-    // Set up timeout for the request
-    timeoutRef.current = setTimeout(() => {
-      if (isStreaming) {
-        controller.abort();
-        updateSession(activeSession.id, (session) => ({
-          ...session,
-          messages: session.messages.map((msg) =>
-            msg.id === assistantMessage.id && !msg.content
-              ? {
-                ...msg,
-                content: "Request timed out. The AI server may be slow or unavailable. Please check your connection and try again."
-              }
-              : msg
-          )
-        }));
-        setIsStreaming(false);
-      }
-    }, REQUEST_TIMEOUT_MS);
-
+    let timeout;
+    let timedOut = false;
+    let terminal = false;
     let hasReceivedData = false;
+    let hasReasoningActivity = false;
+    let reader;
+    let tokenBuffer = "";
+    let frame;
+    const flushTokens = () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = undefined;
+      const buffered = tokenBuffer;
+      tokenBuffer = "";
+      if (!buffered) return;
+      updateSession(activeSession.id, session => ({
+        ...session,
+        messages: session.messages.map(msg => msg.id === assistantMessage.id
+          ? { ...msg, content: msg.content + buffered } : msg)
+      }));
+    };
+    const finishError = (error) => {
+      if (terminal) return;
+      terminal = true;
+      clearTimeout(timeout);
+      flushTokens();
+      const message = typeof error?.message === "string" && error.message
+        ? error.message : "Something went wrong. Please try again.";
+      updateSession(activeSession.id, session => ({
+        ...session,
+        messages: session.messages.map(msg => msg.id === assistantMessage.id
+          ? { ...msg, error: { ...error, message }, errorOnly: !hasReceivedData,
+            content: msg.content ? `${msg.content}\n\n${message}` : message } : msg)
+      }));
+    };
+    const resetTimeout = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, REQUEST_TIMEOUT_MS);
+    };
+    // Race reads as well as fetch so cancellation also releases held-open streams.
+    let onAbort;
+    const aborted = new Promise((_, reject) => {
+      onAbort = () => reject(new DOMException("Request aborted", "AbortError"));
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    resetTimeout();
 
     try {
-      const response = await fetch("/chat", {
+      const response = await Promise.race([fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMessage.content,
           modelId: selectedModelId,
           thinkingLevel: thinkingLevel || undefined,
-          messages: activeSession.messages.filter(msg => msg.content && ["user", "assistant"].includes(msg.role))
+          messages: activeSession.messages.filter(msg => msg.content && !msg.errorOnly && ["user", "assistant"].includes(msg.role))
             .map(msg => ({ role: msg.role, content: msg.content })),
           mode,
           sessionId: activeSession.id,
           uploads: uploads.length > 0 ? uploads : undefined
         }),
         signal: controller.signal
-      });
+      }), aborted]);
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => "");
-        throw new Error(errorText || `Request failed (${response.status})`);
+        const json = await Promise.race([response.json().catch(() => null), aborted]);
+        const message = typeof json?.message === "string" ? json.message
+          : typeof json?.error === "string" ? json.error : `Request failed (${response.status})`;
+        throw Object.assign(new Error(message), {
+          code: json?.code, recoverable: json?.recoverable, retryAfterSeconds: json?.retryAfterSeconds
+        });
       }
 
       if (!response.body) {
         throw new Error("No response received from server");
       }
 
-      const reader = response.body.getReader();
+      reader = response.body.getReader();
       const decoder = new TextDecoder();
 
       const parser = createParser((event) => {
-        if (event.type !== "event") return;
+        if (event.type !== "event" || terminal || controller.signal.aborted) return;
         const eventName = event.event || "";
         const payload = event.data || "";
         let parsed = null;
@@ -437,39 +462,22 @@ export function useChatSession() {
         } catch (error) {
           parsed = { text: payload };
         }
+        parsed ||= {};
 
         if (eventName === "token") {
+          if (typeof parsed.text !== "string" || !parsed.text) return;
           hasReceivedData = true;
-          // Reset timeout on receiving data
-          if (timeoutRef.current) {
-            clearTimeout(timeoutRef.current);
-            timeoutRef.current = setTimeout(() => {
-              controller.abort();
-            }, REQUEST_TIMEOUT_MS);
-          }
+          resetTimeout();
           // Buffer tokens and flush via rAF for smooth streaming
-          tokenBufferRef.current += (parsed.text || "");
-          if (!flushScheduledRef.current) {
-            flushScheduledRef.current = true;
-            requestAnimationFrame(() => {
-              const buffered = tokenBufferRef.current;
-              tokenBufferRef.current = "";
-              flushScheduledRef.current = false;
-              if (buffered) {
-                updateSession(activeSession.id, (session) => ({
-                  ...session,
-                  messages: session.messages.map((msg) =>
-                    msg.id === assistantMessage.id
-                      ? { ...msg, content: msg.content + buffered }
-                      : msg
-                  )
-                }));
-              }
-            });
-          }
+          tokenBuffer += parsed.text;
+          if (frame === undefined) frame = requestAnimationFrame(flushTokens);
         }
 
         if (eventName === "activity") {
+          if (parsed.state === "reasoning" && !hasReasoningActivity) {
+            hasReasoningActivity = true;
+            resetTimeout();
+          }
           const activityKey = parsed.tool
             ? `tool:${parsed.tool}`
             : parsed.state;
@@ -503,95 +511,54 @@ export function useChatSession() {
         }
 
         if (eventName === "error") {
-          updateSession(activeSession.id, (session) => ({
-            ...session,
-            messages: session.messages.map((msg) =>
-              msg.id === assistantMessage.id
-                ? {
-                  ...msg,
-                  content:
-                    parsed.message || "Something went wrong. Please try again."
-                }
-                : msg
-            )
-          }));
+          finishError(parsed);
+        }
+
+        if (eventName === "done") {
+          if (!hasReceivedData) {
+            finishError({ code: "empty_response", message: "The AI service returned an empty response. Please try again.", recoverable: true });
+          } else {
+            terminal = true;
+            clearTimeout(timeout);
+            flushTokens();
+          }
         }
       });
 
-      while (true) {
-        const { value, done } = await reader.read();
+      while (!terminal) {
+        const { value, done } = await Promise.race([reader.read(), aborted]);
         if (done) break;
 
         const chunk = decoder.decode(value, { stream: true });
         parser.feed(chunk);
       }
 
-      // Final flush of any remaining buffered tokens
-      if (tokenBufferRef.current) {
-        const remaining = tokenBufferRef.current;
-        tokenBufferRef.current = "";
-        flushScheduledRef.current = false;
-        updateSession(activeSession.id, (session) => ({
-          ...session,
-          messages: session.messages.map((msg) =>
-            msg.id === assistantMessage.id
-              ? { ...msg, content: msg.content + remaining }
-              : msg
-          )
-        }));
+      if (!terminal) {
+        finishError({ code: hasReceivedData ? "interrupted" : "empty_response", recoverable: true,
+          message: hasReceivedData
+            ? "Response was interrupted before completion. The partial response has been saved."
+            : "The AI service returned an empty response. Please try again." });
       }
-
-      // Final save
-      setSessions(prev => [...prev]);
     } catch (error) {
-      // Clear timeout on error
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-
-      if (error?.name === "AbortError") {
-        updateSession(activeSession.id, (session) => ({
-          ...session,
-          messages: session.messages.map((msg) =>
-            msg.id === assistantMessage.id && !msg.content
-              ? {
-                ...msg,
-                content: hasReceivedData
-                  ? "Response was interrupted. The partial response has been saved."
-                  : "Connection was interrupted. Please check your internet connection and try again."
-              }
-              : msg
-          )
-        }));
-        setIsStreaming(false);
-        return;
-      }
-
-      // Network error handling
-      const isNetworkError = error?.message?.includes("fetch") ||
-        error?.message?.includes("network") ||
-        error?.message?.includes("Failed to fetch") ||
-        !navigator.onLine;
-
-      updateSession(activeSession.id, (session) => ({
-        ...session,
-        messages: session.messages.map((msg) =>
-          msg.id === assistantMessage.id
-            ? {
-              ...msg,
-              content: isNetworkError
-                ? "Unable to connect to the server. Please check your internet connection and try again."
-                : error?.message || "Something went wrong. Please try again."
-            }
-            : msg
-        )
-      }));
+      const isNetworkError = !error?.code && (error?.message?.match(/fetch|network/i) || !navigator.onLine);
+      finishError({ code: timedOut ? "timeout" : error?.code || (controller.signal.aborted ? "interrupted" : "network"),
+        recoverable: error?.recoverable ?? true, retryAfterSeconds: error?.retryAfterSeconds,
+        message: timedOut
+          ? "Request timed out. The AI server may be slow or unavailable. Please try again."
+          : controller.signal.aborted
+          ? "Response was stopped. Any partial response has been saved."
+          : isNetworkError
+          ? "Unable to connect to the server. Please check your internet connection and try again."
+          : error?.message });
     } finally {
-      // Clear timeout on completion
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
+      clearTimeout(timeout);
+      controller.signal.removeEventListener("abort", onAbort);
+      flushTokens();
+      reader?.cancel().catch(() => {});
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setIsStreaming(false);
       }
-      setIsStreaming(false);
     }
   }
 
@@ -621,6 +588,7 @@ export function useChatSession() {
     handleClearHistory,
     handleModeChange,
     handleSend,
+    handleStop: () => abortRef.current?.abort(),
     historyList,
     MODES,
     ACTIVITY_LABELS

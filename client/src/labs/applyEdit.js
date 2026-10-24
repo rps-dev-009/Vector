@@ -7,7 +7,7 @@
  * single undo unit.
  *
  * Operations (per the real server payloads in server/labs/tools.js):
- *   replace          {blockId, before, after, attrs?}   whole-block rewrite
+ *   replace          {blockId, before, after, type?, attrs?} whole-block rewrite
  *   replace_in_block {blockId, before, after}           in-block text change
  *   insert           {blockId, afterId, after, type, attrs?} new block
  *   delete           {blockId, before}                 block removal
@@ -16,8 +16,8 @@
  *
  * replace_in_block has two paths:
  *   - RANGE path: when the target node is a paragraph/heading and its plain
- *     text equals `before`, jsdiff locates the changed span; only that text
- *     range is replaced, so inline marks elsewhere in the block survive.
+ *     text equals `before`, jsdiff locates distinct changed ranges; only those
+ *     ranges are replaced, so inline marks between changes survive.
  *   - FALLBACK path: the new block text is parsed from markdown and the whole
  *     node is replaced (inline marks inside it are lost — documented).
  *   Usage of both paths is counted in `ctx.usage` for observability.
@@ -27,10 +27,10 @@
  * continues.
  */
 
-import { diffWords } from "diff";
+import { diffWordsWithSpace } from "diff";
 import { closeHistory } from "@tiptap/pm/history";
 import { blockToNodeJSON, nodeToBlock } from "./bridge/markdown.js";
-import { BLOCK_STYLE_KEYS, SERVER_ATTR_KEYS, DOCUMENT_STYLE_ID } from "./styles.js";
+import { BLOCK_STYLE_KEYS, SERVER_ATTR_KEYS, DOCUMENT_STYLE_ID, resolveSpacerHeight } from "./styles.js";
 
 export function createApplyContext() {
   return {
@@ -104,6 +104,7 @@ function plainTextOfJSON(nodeJSON) {
 
 /** Extract the server-visible attrs from a top-level node. */
 function attrsFromNode(node) {
+  if (node.type.name === "spacer") return { heightPt: resolveSpacerHeight(node.attrs.heightPt) };
   const attrs = {};
   if (node.attrs.level != null) attrs.level = node.attrs.level;
   if (node.attrs.language) attrs.language = node.attrs.language;
@@ -115,11 +116,21 @@ function attrsFromNode(node) {
 }
 
 /** Node attrs for the whole-block fallback / replace paths. */
-function nodeJSONForText(doc, pos, node, blockId, text, extraAttrs) {
-  const current = attrsFromNode(node);
-  const merged = { ...current, ...(extraAttrs || {}) };
-  const block = { id: blockId, type: node.type.name, text, attrs: merged };
-  return { block, nodeJSON: blockToNodeJSON(block) };
+function nodeJSONForText(doc, pos, node, blockId, text, extraAttrs, type = node.type.name) {
+  const converting = type !== node.type.name;
+  const attrs = extraAttrs ?? (converting ? {} : attrsFromNode(node));
+  const block = { id: blockId, type, text, attrs };
+  const nodeJSON = blockToNodeJSON(block);
+  if (!converting) {
+    // Preserve local attributes (e.g. ordered-list start), while a supplied
+    // server attrs map is complete: omitted style overrides must be cleared.
+    const localAttrs = { ...node.attrs };
+    if (extraAttrs != null) {
+      for (const key of SERVER_ATTR_KEYS) localAttrs[key === "align" ? "textAlign" : key] = null;
+    }
+    nodeJSON.attrs = { ...localAttrs, ...nodeJSON.attrs };
+  }
+  return { block, nodeJSON };
 }
 
 /** id of the top-level sibling before `pos`, or null. */
@@ -212,7 +223,13 @@ export function applyEditEvents(editor, events, ctx, hooks = {}) {
 
     switch (event.op) {
       case "replace": {
-        const { nodeJSON } = nodeJSONForText(tr.doc, pos, node, blockId, event.after ?? "", event.attrs);
+        const type = event.type || node.type.name;
+        if (type !== node.type.name && (!["heading", "paragraph"].includes(type) || !["heading", "paragraph"].includes(node.type.name))) {
+          ctx.skipped.push({ editId: event.editId, blockId, op: event.op, reason: "Unsupported block type conversion" });
+          break;
+        }
+        const { nodeJSON } = nodeJSONForText(tr.doc, pos, node, blockId, event.after ?? "", event.attrs, type);
+        if (event.before === event.after && type !== node.type.name) nodeJSON.content = node.toJSON().content;
         try {
           const newNode = tr.doc.type.schema.nodeFromJSON(nodeJSON);
           hooks.onBeforeEdit?.(event, blockInfo);
@@ -234,8 +251,8 @@ export function applyEditEvents(editor, events, ctx, hooks = {}) {
         // The event's before/after are MARKDOWN strings (with ** ` etc.),
         // while the node holds marks — so we parse both through the bridge
         // and diff their PLAIN text. When the plain(before) matches the
-        // node's current plain text, the changed plain-text range is spliced
-        // and every inline mark outside the range survives.
+        // node's current plain text, only changed ranges are spliced and
+        // every inline mark outside those ranges survives.
         if (
           (node.type.name === "paragraph" || node.type.name === "heading") &&
           beforeText !== afterText
@@ -250,29 +267,38 @@ export function applyEditEvents(editor, events, ctx, hooks = {}) {
             const plainB = plainTextOfJSON(parsedBeforeJSON);
             const plainA = plainTextOfJSON(parsedAfterJSON);
             if (plainB === blockPlainText(node) && plainB !== plainA) {
-              const parts = diffWords(plainB, plainA);
-              const firstChange = parts.findIndex((p) => p.added || p.removed);
-              if (firstChange !== -1) {
-                let lastChange = parts.length - 1;
-                while (lastChange > firstChange && !parts[lastChange].added && !parts[lastChange].removed) {
-                  lastChange -= 1;
+              // Whitespace must participate in the diff to keep offsets exact.
+              const parts = diffWordsWithSpace(plainB, plainA);
+              const changes = [];
+              let beforeOffset = 0, afterOffset = 0, change = null;
+              for (const part of parts) {
+                if (!part.added && !part.removed) {
+                  change = null;
+                  beforeOffset += part.value.length;
+                  afterOffset += part.value.length;
+                  continue;
                 }
-                const prefix = parts.slice(0, firstChange).map((p) => p.value).join("");
-                const suffix = parts.slice(lastChange + 1).map((p) => p.value).join("");
-                const replacement = parts
-                  .slice(firstChange, lastChange + 1)
-                  .filter((p) => p.added)
-                  .map((p) => p.value)
-                  .join("");
-                const rangeStart = prefix.length;
-                const rangeEnd = plainB.length - suffix.length;
-                const from = charOffsetToPos(node, pos, rangeStart);
-                const to = charOffsetToPos(node, pos, rangeEnd);
-                if (from !== null && to !== null && to >= from) {
-                  tr.insertText(replacement, from, to);
-                  ctx.usage.rangePath += 1;
-                  applied = true;
+                if (!change) {
+                  change = { start: beforeOffset, end: beforeOffset, afterStart: afterOffset, afterEnd: afterOffset };
+                  changes.push(change);
                 }
+                if (part.removed) beforeOffset += part.value.length;
+                if (part.added) afterOffset += part.value.length;
+                change.end = beforeOffset;
+                change.afterEnd = afterOffset;
+              }
+              const afterNode = state.schema.nodeFromJSON(parsedAfterJSON);
+              const ranges = changes.map(({ start, end, afterStart, afterEnd }) => ({
+                from: charOffsetToPos(node, pos, start),
+                to: charOffsetToPos(node, pos, end),
+                content: afterNode.content.cut(afterStart, afterEnd)
+              }));
+              if (ranges.length && ranges.every(({ from, to }) => from !== null && to !== null && to >= from)) {
+                // Right-to-left edits keep all earlier positions stable. Use the
+                // parsed inline content so new hard breaks and marks stay valid.
+                for (const { from, to, content } of ranges.reverse()) tr.replaceWith(from, to, content);
+                ctx.usage.rangePath += 1;
+                applied = true;
               }
             }
           } catch {
